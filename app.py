@@ -94,18 +94,14 @@ class Model:
                 subfolder: str | None = None,
             ) -> None:
                 """Download a single file with error handling and logging."""
-                relative_path = Path(filename)
-                if subfolder:
-                    relative_path = Path(subfolder) / relative_path
-                download_path = local_path.parent / relative_path
-
-                if download_path.exists():
-                    print(f"--- {description or filename} already present ---")
+                # local_path is the full path to where the file should be saved
+                if local_path.exists():
+                    print(f"--- {description or filename} already present at {local_path} ---")
                     return
                 
-                download_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.parent.mkdir(parents=True, exist_ok=True)
 
-                print(f"--- Downloading {description or filename}... ---")
+                print(f"--- Downloading {description or filename} to {local_path}... ---")
                 try:
                     hf_hub_download(
                         repo_id=repo_id,

@@ -44,8 +44,18 @@ async def get_project_status(
             # get(timeout=0) returns the result if ready, raises TimeoutError if not
             # The result from _generate_video is the filename in the volume
             print(f"[DEBUG] Checking Modal job status for call_id: {call_id}")
-            output_filename = fc.get(timeout=0)
-            print(f"[DEBUG] Job completed! Output filename: {output_filename}")
+            result = fc.get(timeout=0)
+            print(f"[DEBUG] Job completed! Result type: {type(result)}, Result: {result}")
+            
+            # IMPORTANT: submit() spawns _generate_video.spawn(), which returns a FunctionCall
+            # So result here is actually another FunctionCall object, not the filename
+            # We need to get the actual result from this inner FunctionCall
+            if isinstance(result, modal.FunctionCall):
+                print(f"[DEBUG] Result is a FunctionCall, getting actual output...")
+                output_filename = result.get(timeout=0)
+                print(f"[DEBUG] Actual output filename: {output_filename}")
+            else:
+                output_filename = result
             
             # If we get here, it's done!
             # 1. Read from volume
