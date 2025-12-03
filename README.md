@@ -1,161 +1,495 @@
-# InfiniteTalk on Modal
+# Creatorify AI Service
 
-This project deploys the [MeiGen-AI/InfiniteTalk](https://github.com/MeiGen-AI/InfiniteTalk) model on [Modal](https://modal.com) to provide a high-performance, scalable API for generating talking head videos from an image and audio files.
+**Creatorify AI Service** adalah backend API untuk menghasilkan video talking head (avatar berbicara) menggunakan AI. Proyek ini mengintegrasikan model [InfiniteTalk](https://github.com/MeiGen-AI/InfiniteTalk) dengan infrastruktur modern untuk memberikan layanan video generation yang scalable dan production-ready.
 
-The deployment is optimized for efficient inference, leveraging:
+## 🌟 Fitur Utama
 
-- L40s GPUs (can be easily switched to other [Modal GPU types](https://modal.com/docs/guide/gpu#specifying-gpu-type))
-- `FusioniX` LoRA optimization
-- `flash-attention`
-- `teacache`
+- **AI-Powered Video Generation**: Menghasilkan video talking head dari gambar/video dan audio menggunakan InfiniteTalk model
+- **RESTful API**: API berbasis FastAPI dengan autentikasi API key
+- **Async Job Processing**: Sistem job queue dengan Modal untuk menangani video generation yang memakan waktu lama
+- **Cloud Storage**: Integrasi dengan Cloudinary untuk hosting video hasil
+- **Database Management**: Supabase untuk tracking project dan status
+- **GPU Acceleration**: Optimasi dengan L40S GPU, flash-attention, dan teacache
+- **LoRA Optimization**: Menggunakan FusioniX LoRA untuk hasil yang lebih baik
 
-Note that this does not fully implement the multi-speaking capabilities since that requires downloading separate model weights. We focus on single person for now. Open an issue if you would like multi-person support.
+## 🏗️ Arsitektur
 
-## Prerequisites
+```
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│   Client    │─────▶│  FastAPI     │─────▶│   Modal     │
+│             │      │  (API Layer) │      │  (GPU Jobs) │
+└─────────────┘      └──────────────┘      └─────────────┘
+                            │                      │
+                            ▼                      ▼
+                     ┌──────────────┐      ┌─────────────┐
+                     │   Supabase   │      │ Modal Volume│
+                     │  (Database)  │      │  (Models)   │
+                     └──────────────┘      └─────────────┘
+                            │                      │
+                            ▼                      ▼
+                     ┌──────────────┐      ┌─────────────┐
+                     │  Cloudinary  │◀─────│   Output    │
+                     │   (Storage)  │      │   Volume    │
+                     └──────────────┘      └─────────────┘
+```
 
-1. **Clone this Repository:**
+### Komponen Utama
 
-   ```bash
-   git clone https://github.com/Square-Zero-Labs/modal-infinitetalk
-   cd modal-infinitetalk
-   ```
+1. **FastAPI Application** (`app.py`): Web server yang menyediakan REST API endpoints
+2. **Modal GPU Class**: Menjalankan model InfiniteTalk pada GPU untuk video generation
+3. **Supabase Service**: Mengelola data project dan tracking status
+4. **Cloudinary Service**: Upload dan hosting video hasil generation
+5. **API Routes**: 
+   - `/api/v1/projects` - CRUD operations untuk project
+   - `/api/v1/projects/{id}/status` - Polling status generation
 
-2. **Create a Modal Account:** Sign up for a free account at [modal.com](https://modal.com).
+## 📋 Prerequisites
 
-3. **Install Modal Client:** Install the Modal client library and set up your authentication token.
-   ```bash
-   pip install modal
-   modal setup
-   ```
+1. **Modal Account**: Daftar di [modal.com](https://modal.com)
+2. **Supabase Account**: Daftar di [supabase.com](https://supabase.com)
+3. **Cloudinary Account**: Daftar di [cloudinary.com](https://cloudinary.com)
+4. **Python 3.11+**
+5. **Git & Git LFS**
 
-## Deployment
+## 🚀 Installation & Deployment
 
-The application consists of a persistent web endpoint for production use and a local CLI for testing. It uses a `Volume` to cache the large model files, ensuring they are only downloaded once. A second `Volume` is used to efficiently handle the video outputs.
-
-To deploy the web endpoint, run the following command from your terminal:
+### 1. Clone Repository
 
 ```bash
-pip install pydantic
+git clone <repository-url>
+cd creatorify-ai-service
+```
+
+### 2. Install Modal CLI
+
+```bash
+pip install modal
+modal setup
+```
+
+### 3. Setup Secrets di Modal
+
+Buat secrets berikut di Modal dashboard:
+
+**a. Supabase Secrets** (`supabase-secrets`):
+```bash
+modal secret create supabase-secrets \
+  SUPABASE_URL=your-supabase-url \
+  SUPABASE_KEY=your-supabase-anon-key
+```
+
+**b. Cloudinary Secrets** (`cloudinary-secrets`):
+```bash
+modal secret create cloudinary-secrets \
+  CLOUDINARY_CLOUD_NAME=your-cloud-name \
+  CLOUDINARY_API_KEY=your-api-key \
+  CLOUDINARY_API_SECRET=your-api-secret
+```
+
+**c. API Key Secret** (`api-key-secret`):
+```bash
+modal secret create api-key-secret \
+  API_KEY=your-secure-api-key
+```
+
+### 4. Setup Supabase Database
+
+Buat tabel `projects` di Supabase dengan schema berikut:
+
+```sql
+CREATE TABLE projects (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT,
+  image_url TEXT NOT NULL,
+  audio_url TEXT NOT NULL,
+  prompt TEXT,
+  call_id TEXT,
+  status TEXT DEFAULT 'queued',
+  progress INTEGER DEFAULT 0,
+  video_url TEXT,
+  error_message TEXT,
+  parameters JSONB,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Index untuk query yang sering digunakan
+CREATE INDEX idx_projects_user_id ON projects(user_id);
+CREATE INDEX idx_projects_status ON projects(status);
+CREATE INDEX idx_projects_created_at ON projects(created_at DESC);
+```
+
+### 5. Deploy ke Modal
+
+```bash
 modal deploy app.py
 ```
 
-Modal will build a custom container image, download the model weights into a persistent `Volume`, and deploy the application. After a successful deployment, it will provide a public URL for your API endpoint.
+Deployment pertama akan memakan waktu beberapa menit karena harus download model weights (~50GB). Deployment selanjutnya akan lebih cepat karena model sudah di-cache di Modal Volume.
 
-The initial deployment will take several minutes as it needs to download the large model files. Subsequent deployments will be much faster as the models are cached in the volume.
+## 📖 API Documentation
 
-The weights are under the volume name `infinitetalk-models`.
-Output videos are saved under the volume name `infinitetalk-outputs`.
+### Base URL
 
-## Usage
-
-### 1. Local Testing CLI
-
-For development and testing, you can use the built-in command-line interface to run inference on local files or URLs.
-
-```bash
-modal run app.py --image-path "https://example.com/portrait.jpg" --audio1-path "https://example.com/audio.mp3" --prompt "A dog talking" --output-path outputs/my_video.mp4
+```
+https://<username>--infinitetalk-api-fastapi-app.modal.run
 ```
 
-### 2. Web API Endpoint
+### Authentication
 
-The deployed service can be called via a `POST` request with proxy authentication. The API accepts a JSON payload with the following fields:
-
-- `image` (string, required): A URL to the source image **or video**. The input can be image or video. If video the output video will contain some of the movement from the input video plus the new lip sync to the audio.
-- `audio1` (string, required): A URL to the source audio file (MP3 or WAV).
-- `prompt` (string, optional): A text prompt.
-
-The duration of the output video is automatically determined by the length of the input audio. The video frame count is calculated to match this combined duration while adhering to the model's `4n+1` frame constraint.
-
-#### Authentication
-
-The API requires proxy authentication tokens.
-
-To create proxy auth tokens, go to your Modal workspace settings and generate a new token. Set the token ID and secret as environment variables:
+Semua endpoint memerlukan API key di header:
 
 ```bash
-export TOKEN_ID="your-token-id"
-export TOKEN_SECRET="your-token-secret"
+X-API-Key: your-api-key
 ```
 
-**API Usage - Polling Pattern:**
+### Endpoints
 
-Following [Modal's recommended polling pattern](https://modal.com/docs/guide/webhook-timeouts), we use two endpoints for long-running video generation:
+#### 1. Create Project
 
-1. **Submit Job** - Starts generation and returns call_id
-2. **Poll Results** - Check status and download video when ready
+Membuat project baru dan memulai video generation.
 
-**Step 1: Submit Job**
+**Request:**
+```http
+POST /api/v1/projects
+Content-Type: application/json
+X-API-Key: your-api-key
+
+{
+  "title": "My Talking Avatar",
+  "description": "Test video generation",
+  "image_url": "https://example.com/portrait.jpg",
+  "audio_url": "https://example.com/speech.mp3",
+  "prompt": "A person is talking",
+  "parameters": {
+    "sample_steps": 8,
+    "sample_shift": 3.0,
+    "sample_text_guide_scale": 1.0,
+    "sample_audio_guide_scale": 6.0,
+    "lora_scale": 1.0,
+    "color_correction_strength": 0.2,
+    "seed": 42
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "id": "uuid-here",
+  "user_id": null,
+  "title": "My Talking Avatar",
+  "description": "Test video generation",
+  "image_url": "https://example.com/portrait.jpg",
+  "audio_url": "https://example.com/speech.mp3",
+  "prompt": "A person is talking",
+  "call_id": "modal-call-id",
+  "status": "queued",
+  "progress": 0,
+  "video_url": null,
+  "error_message": null,
+  "created_at": "2025-12-03T10:00:00Z",
+  "updated_at": "2025-12-03T10:00:00Z",
+  "parameters": { ... }
+}
+```
+
+#### 2. Get Project Status
+
+Mengecek status generation dan mendapatkan video URL jika sudah selesai.
+
+**Request:**
+```http
+GET /api/v1/projects/{project_id}/status
+X-API-Key: your-api-key
+```
+
+**Response:**
+```json
+{
+  "id": "uuid-here",
+  "status": "finished",
+  "progress": 100,
+  "video_url": "https://res.cloudinary.com/.../video.mp4",
+  "error_message": null
+}
+```
+
+**Status Values:**
+- `queued`: Job sudah di-submit ke Modal
+- `processing`: Job sedang diproses
+- `finished`: Video berhasil di-generate dan di-upload
+- `failed`: Terjadi error
+
+#### 3. List Projects
+
+Mendapatkan list semua project.
+
+**Request:**
+```http
+GET /api/v1/projects?user_id=optional&limit=20
+X-API-Key: your-api-key
+```
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid-1",
+    "title": "Project 1",
+    "status": "finished",
+    ...
+  },
+  {
+    "id": "uuid-2",
+    "title": "Project 2",
+    "status": "processing",
+    ...
+  }
+]
+```
+
+#### 4. Get Project Details
+
+Mendapatkan detail lengkap sebuah project.
+
+**Request:**
+```http
+GET /api/v1/projects/{project_id}
+X-API-Key: your-api-key
+```
+
+## 🔧 Generation Parameters
+
+Parameter yang dapat dikustomisasi untuk video generation:
+
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| `sample_steps` | int | 8 | 1-50 | Jumlah sampling steps (lebih tinggi = lebih detail, lebih lambat) |
+| `sample_shift` | float | 3.0 | - | Sampling shift parameter |
+| `sample_text_guide_scale` | float | 1.0 | - | Text guidance scale |
+| `sample_audio_guide_scale` | float | 6.0 | - | Audio guidance scale (lebih tinggi = lebih mengikuti audio) |
+| `lora_scale` | float | 1.0 | 0-2 | LoRA strength (1.0 = default, >1 = stronger effect) |
+| `color_correction_strength` | float | 0.2 | 0-1 | Kekuatan color correction |
+| `seed` | int | random | - | Random seed untuk reproducibility |
+| `frame_num` | int | auto | - | Force specific frame count (advanced, auto-calculated dari audio duration) |
+
+## 💡 Usage Examples
+
+### Python Example
+
+```python
+import requests
+import time
+
+API_URL = "https://<username>--infinitetalk-api-fastapi-app.modal.run"
+API_KEY = "your-api-key"
+
+headers = {
+    "X-API-Key": API_KEY,
+    "Content-Type": "application/json"
+}
+
+# 1. Create project
+project_data = {
+    "title": "Test Avatar",
+    "image_url": "https://example.com/face.jpg",
+    "audio_url": "https://example.com/speech.mp3",
+    "prompt": "A person is talking about AI",
+    "parameters": {
+        "sample_steps": 8,
+        "seed": 42
+    }
+}
+
+response = requests.post(
+    f"{API_URL}/api/v1/projects",
+    headers=headers,
+    json=project_data
+)
+project = response.json()
+project_id = project["id"]
+
+print(f"Project created: {project_id}")
+
+# 2. Poll for status
+while True:
+    response = requests.get(
+        f"{API_URL}/api/v1/projects/{project_id}/status",
+        headers=headers
+    )
+    status = response.json()
+    
+    print(f"Status: {status['status']} - Progress: {status['progress']}%")
+    
+    if status["status"] == "finished":
+        print(f"Video URL: {status['video_url']}")
+        break
+    elif status["status"] == "failed":
+        print(f"Error: {status['error_message']}")
+        break
+    
+    time.sleep(10)  # Poll every 10 seconds
+```
+
+### cURL Example
 
 ```bash
-# Submit video generation job and capture call_id
-CALL_ID=$(curl -s -X POST \
-     -H "Content-Type: application/json" \
-     -H "Modal-Key: $TOKEN_ID" \
-     -H "Modal-Secret: $TOKEN_SECRET" \
-     -d '{
-           "image": "https://example.com/portrait.jpg",
-           "audio1": "https://example.com/audio.mp3",
-           "prompt": "A dog is talking"
-         }' \
-     "https://<username>--infinitetalk-api-model-submit.modal.run" | jq -r '.call_id')
+# Set variables
+API_URL="https://<username>--infinitetalk-api-fastapi-app.modal.run"
+API_KEY="your-api-key"
 
-echo "Job submitted with call_id: $CALL_ID"
+# Create project
+PROJECT_ID=$(curl -s -X POST "$API_URL/api/v1/projects" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Test Video",
+    "image_url": "https://example.com/portrait.jpg",
+    "audio_url": "https://example.com/audio.mp3",
+    "prompt": "A person talking"
+  }' | jq -r '.id')
+
+echo "Project ID: $PROJECT_ID"
+
+# Check status
+curl -X GET "$API_URL/api/v1/projects/$PROJECT_ID/status" \
+  -H "X-API-Key: $API_KEY"
 ```
 
-**Step 2: Poll for Results**
+## 🔍 Model Details
 
-```bash
-# Poll for results - downloads video on success, shows status on failure
-HTTP_STATUS=$(curl -w "%{http_code}" -s --head \
-     -H "Modal-Key: $TOKEN_ID" \
-     -H "Modal-Secret: $TOKEN_SECRET" \
-     "https://<username>--infinitetalk-api-api-result-head.modal.run?call_id=$CALL_ID")
-echo "HTTP $HTTP_STATUS"
+### InfiniteTalk Model
+
+Project ini menggunakan InfiniteTalk, sebuah model AI untuk menghasilkan video talking head dengan fitur:
+
+- **Input**: Gambar/video wajah + audio speech
+- **Output**: Video dengan lip-sync yang natural
+- **Model Size**: ~14B parameters (Wan 2.1 I2V)
+- **Resolution**: 480p (dapat di-upscale)
+- **Frame Rate**: 25 FPS
+- **Duration**: Auto-calculated dari audio duration
+
+### Optimizations
+
+- **FusioniX LoRA**: Meningkatkan kualitas dan konsistensi
+- **Flash Attention**: Mempercepat inference
+- **TeaCache**: Caching untuk efisiensi
+- **GPU Snapshots**: Fast cold start dengan Modal
+
+## 📁 Project Structure
+
+```
+creatorify-ai-service/
+├── app.py                      # Main Modal application
+├── api/
+│   ├── __init__.py
+│   └── v1/
+│       ├── __init__.py
+│       ├── projects.py         # Project CRUD endpoints
+│       └── status.py           # Status polling endpoint
+├── models/
+│   ├── __init__.py
+│   └── project_model.py        # Pydantic models
+├── services/
+│   ├── __init__.py
+│   ├── supabase_service.py     # Supabase integration
+│   └── cloudinary_service.py   # Cloudinary integration
+├── utils/
+│   ├── __init__.py
+│   └── auth.py                 # API key authentication
+├── infinitetalk/               # InfiniteTalk model code (git subtree)
+├── outputs/                    # Local output directory
+└── README.md
 ```
 
-- `202 Accepted` - Shows processing status in terminal only
-- `200 OK` - Downloads video to `outputs/generated_video.mp4`
+## 🐛 Troubleshooting
 
-**Step 3: Retrieve Finished Video**
+### Model Download Issues
 
-```bash
-curl -X GET \
-         -H "Modal-Key: $TOKEN_ID" \
-         -H "Modal-Secret: $TOKEN_SECRET" \
-         --output outputs/api-generated_video.mp4 \
-         "https://<username>--infinitetalk-api-api-result.modal.run?call_id=$CALL_ID"
-    echo "Video saved to outputs/api-generated_video.mp4"
-```
+Jika model gagal di-download:
+1. Pastikan Modal volume `infinitetalk-models` ada
+2. Check Hugging Face access (beberapa model mungkin gated)
+3. Lihat logs dengan `modal logs infinitetalk-api`
 
-Replace:
+### GPU Out of Memory
 
-- `<username>` with your actual Modal username
-- `$TOKEN_ID` and `$TOKEN_SECRET` with your proxy auth token credentials
+Jika terjadi OOM error:
+1. Reduce `sample_steps` (default: 8)
+2. Gunakan video/audio yang lebih pendek
+3. Upgrade ke GPU dengan VRAM lebih besar
 
-The URL format is `https://[username]--[app-name]-[class-name]-[method-name].modal.run` where the class-name is `model` or `api` and the method-name are the methods defined in app.py.
+### Video Generation Timeout
 
-## Resources
+Modal function timeout default adalah 2700 detik (45 menit). Untuk video yang sangat panjang, sesuaikan timeout di `app.py`.
 
-- [Video Tutorial: Step-by-Step Guide](https://youtu.be/gELJhS-DHIc)
+### Cloudinary Upload Failed
+
+Pastikan:
+1. Credentials Cloudinary benar
+2. Account memiliki quota yang cukup
+3. File size tidak melebihi limit
+
+## 📚 Resources
+
 - [InfiniteTalk Paper](https://arxiv.org/pdf/2508.14033)
-- [InfiniteTalk Repo](https://github.com/MeiGen-AI/InfiniteTalk)
+- [InfiniteTalk Repository](https://github.com/MeiGen-AI/InfiniteTalk)
+- [Modal Documentation](https://modal.com/docs)
+- [FastAPI Documentation](https://fastapi.tiangolo.com)
+- [Supabase Documentation](https://supabase.com/docs)
+- [Cloudinary Documentation](https://cloudinary.com/documentation)
 
-## Development Notes
+## 🔄 Development Notes
 
 ### Git Subtree Management
 
-When originally added:
+InfiniteTalk code diintegrasikan menggunakan git subtree:
 
 ```bash
+# Initial add (sudah dilakukan)
 git subtree add --prefix infinitetalk https://github.com/MeiGen-AI/InfiniteTalk main --squash
-```
 
-If the original `InfiniteTalk` repository is updated and you want to incorporate those changes into this project, you can pull the updates using the following command:
-
-```bash
+# Update ke versi terbaru
 git subtree pull --prefix infinitetalk https://github.com/MeiGen-AI/InfiniteTalk main --squash
 ```
 
-### Changes made to InfiniteTalk base repo
+### Local Development
 
-- generate_infinitetalk.py (attention fix)
+Untuk testing lokal tanpa deploy:
+
+```bash
+# Run Modal function locally
+modal run app.py
+
+# Serve FastAPI locally (requires Modal volumes mounted)
+modal serve app.py
+```
+
+### Changes to InfiniteTalk
+
+Modifikasi yang dilakukan pada InfiniteTalk base repo:
+- `generate_infinitetalk.py`: Attention fix untuk compatibility
+- Environment variable setup untuk distributed training
+
+## 📝 License
+
+Project ini menggunakan InfiniteTalk model yang memiliki lisensi sendiri. Pastikan untuk mematuhi terms of use dari:
+- InfiniteTalk model
+- Wan model
+- Modal platform
+- Cloudinary service
+
+## 🤝 Contributing
+
+Contributions are welcome! Please:
+1. Fork repository
+2. Create feature branch
+3. Commit changes
+4. Push to branch
+5. Create Pull Request
+
+## 📧 Support
+
+Untuk pertanyaan atau issues, silakan buka issue di repository ini.
