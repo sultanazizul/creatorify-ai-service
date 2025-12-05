@@ -14,6 +14,7 @@ class GenerationParams(BaseModel):
     frame_num: Optional[int] = Field(None, description="Force specific frame number (advanced)")
 
 class ProjectCreate(BaseModel):
+    user_id: Optional[str] = "anonymous"
     title: str
     description: Optional[str] = None
     image_url: str

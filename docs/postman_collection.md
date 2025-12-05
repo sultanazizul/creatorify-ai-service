@@ -70,3 +70,28 @@ Create an environment in Postman with:
   "video_url": "https://res.cloudinary.com/..."
 }
 ```
+
+### 5. Delete Project
+- **Method**: `DELETE`
+- **URL**: `{{base_url}}/api/v1/projects/{id}`
+- **Response** (200 OK):
+```json
+{
+  "detail": "Project deleted successfully"
+}
+```
+
+### 6. Get Projects by User ID
+- **Method**: `GET`
+- **URL**: `{{base_url}}/api/v1/projects/?user_id=user_123`
+- **Response** (200 OK):
+```json
+[
+  {
+    "id": "...",
+    "user_id": "user_123",
+    "status": "finished",
+    ...
+  }
+]
+```

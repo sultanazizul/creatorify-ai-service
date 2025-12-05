@@ -83,3 +83,16 @@ class SupabaseService:
         except Exception as e:
             print(f"Error listing projects: {e}")
             return []
+
+    def delete_project(self, project_id: str) -> bool:
+        if not self.client:
+            return False
+            
+        try:
+            response = self.client.table("projects").delete().eq("id", project_id).execute()
+            if response.data and len(response.data) > 0:
+                return True
+            return False
+        except Exception as e:
+            print(f"Error deleting project: {e}")
+            return False

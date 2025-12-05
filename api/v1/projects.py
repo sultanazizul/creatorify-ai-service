@@ -58,7 +58,7 @@ async def create_project(
         call_id = job.object_id
         
         # 2. Save to DB
-        db_project = db.create_project(project, call_id)
+        db_project = db.create_project(project, call_id, user_id=project.user_id)
         
         if not db_project:
              raise HTTPException(status_code=500, detail="Failed to save project to DB")
@@ -76,12 +76,22 @@ async def list_projects(
 ):
     return db.list_projects(user_id, limit)
 
-@router.get("/{project_id}", response_model=ProjectResponse)
+@router.get("/{id}", response_model=ProjectResponse)
 async def get_project(
-    project_id: str,
+    id: str,
     db: SupabaseService = Depends(get_db)
 ):
-    project = db.get_project(project_id)
+    project = db.get_project(id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
+
+@router.delete("/{id}")
+async def delete_project(
+    id: str,
+    db: SupabaseService = Depends(get_db)
+):
+    success = db.delete_project(id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Project not found or could not be deleted")
+    return {"detail": "Project deleted successfully"}

@@ -12,13 +12,13 @@ router = APIRouter(dependencies=[Depends(get_api_key)])
 def get_services():
     return SupabaseService(), CloudinaryService()
 
-@router.get("/{project_id}/status", response_model=ProjectStatus)
+@router.get("/{id}/status", response_model=ProjectStatus)
 async def get_project_status(
-    project_id: str,
+    id: str,
     services: tuple = Depends(get_services)
 ):
     db, cloudinary_service = services
-    project = db.get_project(project_id)
+    project = db.get_project(id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -70,12 +70,12 @@ async def get_project_status(
             if os.path.exists(output_path):
                 print(f"[DEBUG] File found! Uploading to Cloudinary...")
                 # 2. Upload to Cloudinary
-                video_url = cloudinary_service.upload_video(output_path, public_id=f"project_{project_id}")
+                video_url = cloudinary_service.upload_video(output_path, public_id=f"project_{id}")
                 print(f"[DEBUG] Cloudinary upload result: {video_url}")
                 
                 if video_url:
                     # 3. Update DB
-                    db.update_status(project_id, "finished", 100, video_url=video_url)
+                    db.update_status(id, "finished", 100, video_url=video_url)
                     project['status'] = 'finished'
                     project['progress'] = 100
                     project['video_url'] = video_url
@@ -84,14 +84,14 @@ async def get_project_status(
                     # Upload failed
                     error_msg = "Cloudinary upload failed"
                     print(f"[ERROR] {error_msg}")
-                    db.update_status(project_id, "failed", error_message=error_msg)
+                    db.update_status(id, "failed", error_message=error_msg)
                     project['status'] = 'failed'
                     project['error_message'] = error_msg
             else:
                 # File not found in volume?
                 error_msg = f"Output file missing at {output_path}"
                 print(f"[ERROR] {error_msg}")
-                db.update_status(project_id, "failed", error_message=error_msg)
+                db.update_status(id, "failed", error_message=error_msg)
                 project['status'] = 'failed'
                 project['error_message'] = error_msg
 
@@ -101,7 +101,7 @@ async def get_project_status(
             # We can't easily get progress % from Modal without a separate side-channel (like DB updates from the job)
             # For now, just keep it as processing
             if project['status'] == 'queued':
-                db.update_status(project_id, "processing", 10)
+                db.update_status(id, "processing", 10)
                 project['status'] = 'processing'
                 project['progress'] = 10
             
@@ -111,7 +111,7 @@ async def get_project_status(
             error_msg = f"Modal job execution failed: {str(e)}"
             print(f"[ERROR] {error_msg}")
             print(f"[ERROR] Traceback: {traceback.format_exc()}")
-            db.update_status(project_id, "failed", error_message=error_msg)
+            db.update_status(id, "failed", error_message=error_msg)
             project['status'] = 'failed'
             project['error_message'] = error_msg
 
