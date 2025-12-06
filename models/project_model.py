@@ -14,11 +14,13 @@ class GenerationParams(BaseModel):
     frame_num: Optional[int] = Field(None, description="Force specific frame number (advanced)")
 
 class ProjectCreate(BaseModel):
-    user_id: Optional[str] = "anonymous"
+    user_id: str = "anonymous"
     title: str
     description: Optional[str] = None
     image_url: str
     audio_url: str
+    audio_url_2: Optional[str] = None # Added for multi-person support
+    audio_order: str = "left_right" # "left_right", "right_left", "meanwhile"
     prompt: Optional[str] = None
     parameters: Optional[GenerationParams] = Field(default_factory=GenerationParams)
 
@@ -29,6 +31,9 @@ class ProjectResponse(BaseModel):
     description: Optional[str]
     image_url: str
     audio_url: str
+    audio_url_2: Optional[str] = None # Added for multi-person support
+    audio_order: str = "left_right" # "left_right", "right_left", "meanwhile"
+    type: str = "single_person" # "single_person" or "multi_person"
     prompt: Optional[str]
     call_id: Optional[str]
     status: str

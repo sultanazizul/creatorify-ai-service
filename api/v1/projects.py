@@ -52,6 +52,8 @@ async def create_project(
         job = Model().submit.spawn(
             image_url=project.image_url,
             audio_url=project.audio_url,
+            audio_url_2=project.audio_url_2, # Pass second audio if available
+            audio_order=project.audio_order, # Pass audio order
             prompt=project.prompt,
             params=params_dict
         )
@@ -72,9 +74,10 @@ async def create_project(
 async def list_projects(
     user_id: str = None, 
     limit: int = 20,
+    type: str = None, # Added type filter
     db: SupabaseService = Depends(get_db)
 ):
-    return db.list_projects(user_id, limit)
+    return db.list_projects(user_id, limit, project_type=type)
 
 @router.get("/{id}", response_model=ProjectResponse)
 async def get_project(

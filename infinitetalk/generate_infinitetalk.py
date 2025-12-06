@@ -305,11 +305,27 @@ def audio_prepare_multi(left_path, right_path, audio_type, sample_rate=16000):
         human_speech_array2 = np.zeros(human_speech_array1.shape[0])
 
     if audio_type=='para':
-        new_human_speech1 = human_speech_array1
-        new_human_speech2 = human_speech_array2
+        # Pad to same length for parallel playback
+        max_len = max(human_speech_array1.shape[0], human_speech_array2.shape[0])
+        
+        if human_speech_array1.shape[0] < max_len:
+            pad_width = max_len - human_speech_array1.shape[0]
+            new_human_speech1 = np.concatenate([human_speech_array1, np.zeros(pad_width)])
+        else:
+            new_human_speech1 = human_speech_array1
+            
+        if human_speech_array2.shape[0] < max_len:
+            pad_width = max_len - human_speech_array2.shape[0]
+            new_human_speech2 = np.concatenate([human_speech_array2, np.zeros(pad_width)])
+        else:
+            new_human_speech2 = human_speech_array2
     elif audio_type=='add':
         new_human_speech1 = np.concatenate([human_speech_array1[: human_speech_array1.shape[0]], np.zeros(human_speech_array2.shape[0])]) 
         new_human_speech2 = np.concatenate([np.zeros(human_speech_array1.shape[0]), human_speech_array2[:human_speech_array2.shape[0]]])
+    elif audio_type=='reverse_add':
+        # Right audio (person2) first, then Left audio (person1)
+        new_human_speech1 = np.concatenate([np.zeros(human_speech_array2.shape[0]), human_speech_array1[:human_speech_array1.shape[0]]])
+        new_human_speech2 = np.concatenate([human_speech_array2[: human_speech_array2.shape[0]], np.zeros(human_speech_array1.shape[0])])
     sum_human_speechs = new_human_speech1 + new_human_speech2
     return new_human_speech1, new_human_speech2, sum_human_speechs
 

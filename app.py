@@ -2,7 +2,7 @@ import modal
 import os
 import time
 from fastapi import FastAPI
-from api.v1 import projects, status
+from api.v1 import projects, status, avatars
 
 # Define the new App class
 app = modal.App("infinitetalk-api")
@@ -36,7 +36,7 @@ image = (
 
 # --- GPU Model Class ---
 @app.cls(
-    gpu="L40S",
+    gpu="H100",
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
     image=image,
@@ -249,7 +249,7 @@ class Model:
             raise
 
     @modal.method()
-    def _generate_video(self, image: bytes, audio1: bytes, prompt: str | None = None, params: dict = None) -> str:
+    def _generate_video(self, image: bytes, audio1: bytes, audio2: bytes = None, audio_order: str = "left_right", prompt: str | None = None, params: dict = None) -> str:
         import sys
         sys.path.extend(["/root", "/root/infinitetalk"])
         from PIL import Image as PILImage
@@ -288,6 +288,15 @@ class Model:
             audio1_path = tmp_audio1.name
         
         cond_audio_dict = {"person1": audio1_path}
+        
+        # Handle second audio for multi-person
+        audio2_path = None
+        if audio2:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio2:
+                tmp_audio2.write(audio2)
+                audio2_path = tmp_audio2.name
+            cond_audio_dict["person2"] = audio2_path
+
         input_data = {
             "cond_video": image_path,
             "cond_audio": cond_audio_dict,
@@ -299,18 +308,36 @@ class Model:
             "cond_video": input_data["cond_video"],
             "cond_audio": input_data["cond_audio"]
         }
+        
+        # Map audio_order to audio_type
         if len(input_data["cond_audio"]) > 1:
-            input_json_data["audio_type"] = "add"
+            if audio_order == "meanwhile":
+                input_json_data["audio_type"] = "para"
+            elif audio_order == "right_left":
+                input_json_data["audio_type"] = "reverse_add"
+            else: # left_right (default)
+                input_json_data["audio_type"] = "add"
         
         with tempfile.NamedTemporaryFile(mode='w', suffix=".json", delete=False) as tmp_json:
             json.dump(input_json_data, tmp_json)
             input_json_path = tmp_json.name
         
         # Calculate frame_num
-        total_audio_duration = librosa.get_duration(path=audio1_path)
+        duration1 = librosa.get_duration(path=audio1_path)
+        total_audio_duration = duration1
+        
+        if audio2_path:
+            duration2 = librosa.get_duration(path=audio2_path)
+            if audio_order == "meanwhile":
+                total_audio_duration = max(duration1, duration2)
+            else: # left_right or right_left (sequential)
+                total_audio_duration = duration1 + duration2
+                
         audio_embedding_frames = int(total_audio_duration * 25)
         max_possible_frames = max(5, audio_embedding_frames - 5)
-        calculated_frame_num = min(1000, max_possible_frames)
+        # Remove hardcoded limit of 1000 frames (approx 40s)
+        # calculated_frame_num = min(1000, max_possible_frames)
+        calculated_frame_num = max_possible_frames
         n = (calculated_frame_num - 1) // 4
         frame_num = 4 * n + 1
         
@@ -396,12 +423,14 @@ class Model:
         if Path(args.audio_save_dir).exists():
             shutil.rmtree(args.audio_save_dir)
         os.unlink(audio1_path)
+        if audio2_path:
+            os.unlink(audio2_path)
         os.unlink(image_path)
 
         return output_filename + ".mp4"
 
     @modal.method()
-    def submit(self, image_url: str, audio_url: str, prompt: str = None, params: dict = None):
+    def submit(self, image_url: str, audio_url: str, audio_url_2: str = None, audio_order: str = "left_right", prompt: str = None, params: dict = None):
         # Download inputs
         image_bytes = self._download_and_validate(image_url, [
             "image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff",
@@ -409,8 +438,12 @@ class Model:
         ])
         audio1_bytes = self._download_and_validate(audio_url, ["audio/mpeg", "audio/wav", "audio/x-wav"])
         
+        audio2_bytes = None
+        if audio_url_2:
+            audio2_bytes = self._download_and_validate(audio_url_2, ["audio/mpeg", "audio/wav", "audio/x-wav"])
+        
         # Spawn generation
-        return self._generate_video.spawn(image_bytes, audio1_bytes, prompt, params)
+        return self._generate_video.spawn(image_bytes, audio1_bytes, audio2_bytes, audio_order, prompt, params)
 
 # --- FastAPI App ---
 @app.function(
@@ -429,5 +462,6 @@ def fastapi_app():
     # Include routers
     web_app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
     web_app.include_router(status.router, prefix="/api/v1/projects", tags=["status"])
+    web_app.include_router(avatars.router, prefix="/api/v1/avatars", tags=["avatars"])
     
     return web_app
