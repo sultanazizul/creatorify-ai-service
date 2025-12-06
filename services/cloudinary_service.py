@@ -54,6 +54,24 @@ class CloudinaryService:
             print(f"Error uploading image to Cloudinary: {e}")
             return None
 
+    def upload_audio(self, file_path: str, public_id: str = None) -> str:
+        if not self.enabled:
+            return None
+            
+        try:
+            print(f"Uploading {file_path} to Cloudinary...")
+            # Cloudinary treats audio as "video" resource type usually, or "auto"
+            response = cloudinary.uploader.upload(
+                file_path, 
+                resource_type="video", 
+                public_id=public_id,
+                folder="infinitetalk_tts"
+            )
+            return response.get("secure_url")
+        except Exception as e:
+            print(f"Error uploading audio to Cloudinary: {e}")
+            return None
+
     def delete_resource(self, public_id: str, resource_type: str = "image") -> bool:
         if not self.enabled:
             return False

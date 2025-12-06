@@ -2,14 +2,14 @@ import modal
 import os
 import time
 from fastapi import FastAPI
-from api.v1 import projects, status, avatars
+from api.v1 import projects, status, avatars, tts
 
 # Define the new App class
-app = modal.App("infinitetalk-api")
+app = modal.App("creatorify-api")
 
 # Define persistent volumes
-model_volume = modal.Volume.from_name("infinitetalk-models", create_if_missing=True)
-output_volume = modal.Volume.from_name("infinitetalk-outputs", create_if_missing=True)
+model_volume = modal.Volume.from_name("creatorify-models", create_if_missing=True)
+output_volume = modal.Volume.from_name("creatorify-outputs", create_if_missing=True)
 
 MODEL_DIR = "/models"
 OUTPUT_DIR = "/outputs"
@@ -17,7 +17,7 @@ OUTPUT_DIR = "/outputs"
 # Define the custom image
 image = (
     modal.Image.from_registry("pytorch/pytorch:2.4.1-cuda12.1-cudnn9-devel")
-    .env({"HF_HUB_ETAG_TIMEOUT": "60"})
+    .env({"HF_HUB_ETAG_TIMEOUT": "60", "PYTHONPATH": "/root:/root/infinitetalk"})
     .add_local_dir("infinitetalk", "/root/infinitetalk", copy=True)
     .add_local_dir("api", "/root/api", copy=True)
     .add_local_dir("services", "/root/services", copy=True)
@@ -229,6 +229,15 @@ class Model:
                     subfolder="FusionX_LoRa",
                     description="FusioniX LoRA weights",
                 )
+
+                # Download Kokoro-82M TTS model
+                kokoro_dir = model_root / "tts" / "Kokoro-82M"
+                download_repo(
+                    repo_id="hexgrad/Kokoro-82M",
+                    local_dir=kokoro_dir,
+                    check_file="config.json",
+                    description="Kokoro-82M TTS model"
+                )
                 
                 print("--- All required files present. Committing to volume. ---")
                 model_volume.commit()
@@ -412,7 +421,12 @@ class Model:
         generate(args)
         
         generated_file = f"{args.save_file}.mp4"
-        final_output_path = output_dir / f"{output_filename}.mp4"
+        
+        # Organize outputs into folders
+        output_subdir = output_dir / "talking_video"
+        output_subdir.mkdir(parents=True, exist_ok=True)
+        
+        final_output_path = output_subdir / f"{output_filename}.mp4"
         
         if os.path.exists(generated_file):
             os.rename(generated_file, final_output_path)
@@ -448,7 +462,7 @@ class Model:
 # --- FastAPI App ---
 @app.function(
     image=image,
-    volumes={OUTPUT_DIR: output_volume}, # Mount output volume to read results
+    volumes={OUTPUT_DIR: output_volume, MODEL_DIR: model_volume}, # Mount output volume to read results
     secrets=[
         modal.Secret.from_name("supabase-secrets"),
         modal.Secret.from_name("cloudinary-secrets"),
@@ -459,9 +473,153 @@ class Model:
 def fastapi_app():
     web_app = FastAPI(title="InfiniteTalk API", version="1.0.0")
     
+    # Store Modal function reference in app state
+    web_app.state.process_tts_task = process_tts_task
+    
     # Include routers
     web_app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
     web_app.include_router(status.router, prefix="/api/v1/projects", tags=["status"])
     web_app.include_router(avatars.router, prefix="/api/v1/avatars", tags=["avatars"])
+    web_app.include_router(tts.router, prefix="/api/v1/tts", tags=["tts"])
     
     return web_app
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: model_volume},
+    timeout=3600
+)
+def download_models():
+    """
+    Function to manually trigger model downloads to the volume.
+    Run with: modal run app.py::download_models
+    """
+    print("Starting manual model download...")
+    # We can reuse the logic from Model.initialize_model by instantiating it or extracting the logic.
+    # For simplicity and to avoid instantiating the heavy Model class, I'll replicate the download logic here
+    # or better, just instantiate Model and call initialize_model if possible, but Model needs secrets.
+    # Let's just copy the critical download part for TTS since that's what's missing.
+    
+    import sys
+    from pathlib import Path
+    from huggingface_hub import snapshot_download, hf_hub_download
+    
+    model_root = Path(MODEL_DIR)
+    
+    def download_repo(repo_id: str, local_dir: Path, check_file: str, description: str) -> None:
+        check_path = local_dir / check_file
+        if check_path.exists():
+            print(f"--- {description} already present ---")
+            return
+        print(f"--- Downloading {description}... ---")
+        snapshot_download(repo_id=repo_id, local_dir=local_dir)
+        print(f"--- {description} downloaded successfully ---")
+
+    try:
+        # Download Kokoro-82M TTS model
+        kokoro_dir = model_root / "tts" / "Kokoro-82M"
+        download_repo(
+            repo_id="hexgrad/Kokoro-82M",
+            local_dir=kokoro_dir,
+            check_file="config.json",
+            description="Kokoro-82M TTS model"
+        )
+        print("--- Committing volume... ---")
+        model_volume.commit()
+        print("--- Download complete! ---")
+    except Exception as e:
+        print(f"Error downloading models: {e}")
+        raise e
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: model_volume, OUTPUT_DIR: output_volume},
+    secrets=[
+        modal.Secret.from_name("supabase-secrets"),
+        modal.Secret.from_name("cloudinary-secrets")
+    ],
+    timeout=600
+)
+def process_tts_task(tts_id: str, text: str, voice: str, speed: float, lang_code: str):
+    """
+    Background task to generate TTS audio and update Supabase.
+    """
+    print(f"Processing TTS task {tts_id}...")
+    
+    # Lazy imports to avoid top-level dependency issues
+    import os
+    import uuid
+    import tempfile
+    from pathlib import Path
+    import shutil
+    from services.tts_service import TTSService
+    from services.supabase_service import SupabaseService
+    from services.cloudinary_service import CloudinaryService
+    
+    try:
+        # Initialize services
+        tts_service = TTSService()
+        db = SupabaseService()
+        cloudinary = CloudinaryService()
+        
+        # Update: Started processing
+        db.update_tts(tts_id, {"status": "processing", "progress": 10})
+        
+        # 1. Generate Audio
+        print(f"Generating audio for {tts_id}...")
+        db.update_tts(tts_id, {"progress": 30})
+        
+        audio_buffer = tts_service.generate_audio(
+            text=text,
+            voice=voice,
+            speed=speed,
+            lang_code=lang_code
+        )
+        
+        # 2. Save to temp file
+        db.update_tts(tts_id, {"progress": 60})
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            tmp_file.write(audio_buffer.read())
+            tmp_path = tmp_file.name
+            
+        # 3. Upload to Cloudinary
+        print(f"Uploading to Cloudinary for {tts_id}...")
+        db.update_tts(tts_id, {"progress": 80})
+        
+        public_id = f"tts_{uuid.uuid4()}"
+        audio_url = cloudinary.upload_audio(tmp_path, public_id=public_id)
+        
+        if not audio_url:
+            raise Exception("Failed to upload audio to Cloudinary")
+            
+        # 4. Save to Persistent Volume
+        try:
+            output_dir = Path("/outputs/tts")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            persistent_path = output_dir / f"{public_id}.wav"
+            shutil.copy(tmp_path, persistent_path)
+        except Exception as e:
+            print(f"Warning: Failed to save to persistent volume: {e}")
+            
+        # Clean up temp file
+        os.unlink(tmp_path)
+        
+        # 5. Update Supabase
+        print(f"Updating Supabase for {tts_id}...")
+        db.update_tts(tts_id, {
+            "audio_url": audio_url,
+            "status": "completed",
+            "progress": 100
+        })
+        
+        print(f"TTS task {tts_id} completed successfully.")
+        
+    except Exception as e:
+        print(f"Error in TTS task {tts_id}: {e}")
+        # Update status to failed
+        try:
+            db = SupabaseService()
+            db.update_tts(tts_id, {"status": "failed"})
+        except Exception as db_e:
+            print(f"Failed to update error status in DB: {db_e}")
+        raise e

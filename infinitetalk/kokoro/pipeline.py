@@ -152,7 +152,13 @@ class KPipeline:
         if voice.endswith('.pt'):
             f = voice
         else:
-            f = hf_hub_download(repo_id=self.repo_id, filename=f'voices/{voice}.pt')
+            # Check if repo_id is a local directory
+            if os.path.isdir(self.repo_id):
+                f = os.path.join(self.repo_id, f'voices/{voice}.pt')
+                if not os.path.exists(f):
+                     raise FileNotFoundError(f"Voice file not found at {f}")
+            else:
+                f = hf_hub_download(repo_id=self.repo_id, filename=f'voices/{voice}.pt')
             if not voice.startswith(self.lang_code):
                 v = LANG_CODES.get(voice, voice)
                 p = LANG_CODES.get(self.lang_code, self.lang_code)

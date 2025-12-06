@@ -167,3 +167,86 @@ class SupabaseService:
         except Exception as e:
             print(f"Error deleting avatar: {e}")
             return False
+
+    # --- TTS Methods ---
+    def create_tts(self, tts_data: dict, audio_url: str = None, user_id: str = "anonymous") -> dict:
+        if not self.client:
+            return {
+                "id": "mock-tts-id", 
+                "text": tts_data.get("text"), 
+                "audio_url": audio_url,
+                "status": "pending"
+            }
+            
+        data = {
+            "user_id": user_id,
+            "text": tts_data.get("text"),
+            "voice": tts_data.get("voice"),
+            "speed": tts_data.get("speed"),
+            "lang_code": tts_data.get("lang_code"),
+            "audio_url": audio_url,
+            "status": "pending",
+            "progress": 0
+        }
+        
+        try:
+            response = self.client.table("tts_projects").insert(data).execute()
+            if response.data:
+                return response.data[0]
+            return None
+        except Exception as e:
+            print(f"Error creating TTS project: {e}")
+            raise e
+
+    def update_tts(self, tts_id: str, updates: dict) -> dict:
+        if not self.client:
+            return None
+            
+        try:
+            response = self.client.table("tts_projects").update(updates).eq("id", tts_id).execute()
+            if response.data:
+                return response.data[0]
+            return None
+        except Exception as e:
+            print(f"Error updating TTS project: {e}")
+            return None
+
+    def get_tts(self, tts_id: str) -> dict:
+        if not self.client:
+            return None
+        try:
+            response = self.client.table("tts_projects").select("*").eq("id", tts_id).execute()
+            if response.data:
+                return response.data[0]
+            return None
+        except Exception as e:
+            print(f"Error getting TTS project: {e}")
+            return None
+
+    def list_tts(self, user_id: str = None, limit: int = 20):
+        if not self.client:
+            return []
+        
+        query = self.client.table("tts_projects").select("*").order("created_at", desc=True).limit(limit)
+        if user_id:
+            query = query.eq("user_id", user_id)
+            
+        try:
+            response = query.execute()
+            return response.data
+        except Exception as e:
+            print(f"Error listing TTS projects: {e}")
+            return []
+
+    def delete_tts(self, tts_id: str) -> bool:
+        if not self.client:
+            return False
+            
+        try:
+            response = self.client.table("tts_projects").delete().eq("id", tts_id).execute()
+            if response.data and len(response.data) > 0:
+                return True
+            return False
+        except Exception as e:
+            print(f"Error deleting TTS project: {e}")
+            return False
