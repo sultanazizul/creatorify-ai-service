@@ -250,3 +250,98 @@ class SupabaseService:
         except Exception as e:
             print(f"Error deleting TTS project: {e}")
             return False
+
+    # --- Chatterbox Project Methods ---
+    def create_chatterbox_project(self, project_data: dict, user_id: str = "anonymous") -> dict:
+        """Create a new Chatterbox project (TTS, Multilingual, or VC)."""
+        if not self.client:
+            return {
+                "id": "mock-chatterbox-id",
+                "status": "pending",
+                "progress": 0
+            }
+        
+        data = {
+            "user_id": user_id,
+            "project_type": project_data.get("project_type"),
+            "text": project_data.get("text"),
+            "language_id": project_data.get("language_id"),
+            "voice_sample_id": project_data.get("voice_sample_id"),
+            "source_audio_url": project_data.get("source_audio_url"),
+            "exaggeration": project_data.get("exaggeration", 0.5),
+            "temperature": project_data.get("temperature", 0.8),
+            "cfg_weight": project_data.get("cfg_weight", 0.5),
+            "repetition_penalty": project_data.get("repetition_penalty", 1.2),
+            "min_p": project_data.get("min_p", 0.05),
+            "top_p": project_data.get("top_p", 1.0),
+            "status": "pending",
+            "progress": 0
+        }
+        
+        try:
+            response = self.client.table("chatterbox_projects").insert(data).execute()
+            if response.data:
+                return response.data[0]
+            return None
+        except Exception as e:
+            print(f"Error creating Chatterbox project: {e}")
+            raise e
+
+    def update_chatterbox_project(self, project_id: str, updates: dict) -> dict:
+        """Update a Chatterbox project."""
+        if not self.client:
+            return None
+        
+        try:
+            response = self.client.table("chatterbox_projects").update(updates).eq("id", project_id).execute()
+            if response.data:
+                return response.data[0]
+            return None
+        except Exception as e:
+            print(f"Error updating Chatterbox project: {e}")
+            return None
+
+    def get_chatterbox_project(self, project_id: str) -> dict:
+        """Get a specific Chatterbox project."""
+        if not self.client:
+            return None
+        
+        try:
+            response = self.client.table("chatterbox_projects").select("*").eq("id", project_id).execute()
+            if response.data:
+                return response.data[0]
+            return None
+        except Exception as e:
+            print(f"Error getting Chatterbox project: {e}")
+            return None
+
+    def list_chatterbox_projects(self, user_id: str = None, project_type: str = None, limit: int = 50) -> list:
+        """List Chatterbox projects."""
+        if not self.client:
+            return []
+        
+        query = self.client.table("chatterbox_projects").select("*").order("created_at", desc=True).limit(limit)
+        
+        if user_id:
+            query = query.eq("user_id", user_id)
+        if project_type:
+            query = query.eq("project_type", project_type)
+        
+        try:
+            response = query.execute()
+            return response.data
+        except Exception as e:
+            print(f"Error listing Chatterbox projects: {e}")
+            return []
+
+    def delete_chatterbox_project(self, project_id: str) -> bool:
+        """Delete a Chatterbox project."""
+        if not self.client:
+            return False
+        
+        try:
+            response = self.client.table("chatterbox_projects").delete().eq("id", project_id).execute()
+            return len(response.data) > 0
+        except Exception as e:
+            print(f"Error deleting Chatterbox project: {e}")
+            return False

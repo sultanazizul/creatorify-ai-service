@@ -3,6 +3,7 @@ import os
 import time
 from fastapi import FastAPI
 from api.v1 import projects, status, avatars, tts
+from api.v1.audio import voice_library, chatterbox_tts, voice_conversion
 
 # Define the new App class
 app = modal.App("creatorify-api")
@@ -28,8 +29,9 @@ image = (
     .pip_install(
         "misaki[en]", "ninja", "psutil", "packaging", "flash_attn==2.7.4.post1",
         "pydantic", "python-magic", "huggingface_hub", "soundfile", "librosa",
-        "xformers==0.0.28", "supabase", "cloudinary", # Added new deps
-        "xfuser==0.4.1" # Pin version to match requirements.txt
+        "xformers==0.0.28", "supabase", "cloudinary",
+        "xfuser==0.4.1",
+        "httpx"  # For calling Chatterbox microservice
     )
     .pip_install_from_requirements("infinitetalk/requirements.txt")
 )
@@ -471,16 +473,24 @@ class Model:
 )
 @modal.asgi_app()
 def fastapi_app():
-    web_app = FastAPI(title="InfiniteTalk API", version="1.0.0")
+    web_app = FastAPI(title="Creatorify AI API", version="2.0.0")
     
-    # Store Modal function reference in app state
+    # Store Modal function references in app state
     web_app.state.process_tts_task = process_tts_task
+    web_app.state.process_chatterbox_tts = process_chatterbox_tts
+    web_app.state.process_chatterbox_multilingual = process_chatterbox_multilingual
+    web_app.state.process_voice_conversion = process_voice_conversion
     
     # Include routers
     web_app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
     web_app.include_router(status.router, prefix="/api/v1/projects", tags=["status"])
     web_app.include_router(avatars.router, prefix="/api/v1/avatars", tags=["avatars"])
     web_app.include_router(tts.router, prefix="/api/v1/tts", tags=["tts"])
+    
+    # Chatterbox routers
+    web_app.include_router(voice_library.router, prefix="/api/v1/audio/voice-library", tags=["voice-library"])
+    web_app.include_router(chatterbox_tts.router, prefix="/api/v1/audio/chatterbox", tags=["chatterbox"])
+    web_app.include_router(voice_conversion.router, prefix="/api/v1/audio/voice-conversion", tags=["voice-conversion"])
     
     return web_app
 
@@ -622,4 +632,387 @@ def process_tts_task(tts_id: str, text: str, voice: str, speed: float, lang_code
             db.update_tts(tts_id, {"status": "failed"})
         except Exception as db_e:
             print(f"Failed to update error status in DB: {db_e}")
+        raise e
+
+# --- Chatterbox Background Processing Functions ---
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: model_volume, OUTPUT_DIR: output_volume},
+    secrets=[
+        modal.Secret.from_name("supabase-secrets"),
+        modal.Secret.from_name("cloudinary-secrets")
+    ],
+    timeout=600,
+    gpu="A10G"
+)
+def process_chatterbox_tts(
+    project_id: str,
+    text: str,
+    voice_sample_id: str,
+    exaggeration: float,
+    temperature: float,
+    cfg_weight: float,
+    repetition_penalty: float,
+    min_p: float,
+    top_p: float
+):
+    """Background task for Chatterbox TTS generation."""
+    print(f"Processing Chatterbox TTS project {project_id}...")
+    
+    import tempfile
+    import uuid
+    from pathlib import Path
+    import shutil
+    import io
+    import soundfile as sf
+    import numpy as np
+    from services.audio_ai.tts.chatterbox.tts_service import ChatterboxTTSService
+    from services.audio_ai.voice_library.voice_manager import VoiceManager
+    from services.audio_ai.tts.text_chunker import TextChunker
+    from services.supabase_service import SupabaseService
+    from services.cloudinary_service import CloudinaryService
+    
+    try:
+        db = SupabaseService()
+        cloudinary = CloudinaryService()
+        tts_service = ChatterboxTTSService()
+        voice_manager = VoiceManager()
+        
+        # Update: Started
+        db.update_chatterbox_project(project_id, {"status": "processing", "progress": 10})
+        
+        # Get voice sample URL
+        voice_sample = voice_manager.get_voice_sample(voice_sample_id)
+        if not voice_sample:
+            raise Exception(f"Voice sample {voice_sample_id} not found")
+        
+        voice_url = voice_sample["audio_url"]
+        
+        # Check if text needs chunking (> 800 chars)
+        chunker = TextChunker(max_chunk_size=800)
+        chunks = chunker.split_text(text)
+        
+        print(f"Text split into {len(chunks)} chunks")
+        
+        # Generate audio for each chunk
+        db.update_chatterbox_project(project_id, {"progress": 30})
+        audio_chunks = []
+        
+        for i, chunk in enumerate(chunks):
+            chunk_progress = 30 + int((i / len(chunks)) * 40)  # Progress from 30% to 70%
+            db.update_chatterbox_project(project_id, {"progress": chunk_progress})
+            
+            print(f"Generating chunk {i+1}/{len(chunks)}: '{chunk[:50]}...'")
+            
+            chunk_buffer = tts_service.generate_audio(
+                text=chunk,
+                voice_sample_url=voice_url,
+                exaggeration=exaggeration,
+                temperature=temperature,
+                cfg_weight=cfg_weight,
+                repetition_penalty=repetition_penalty,
+                min_p=min_p,
+                top_p=top_p
+            )
+            audio_chunks.append(chunk_buffer)
+        
+        # Concatenate audio chunks if multiple
+        db.update_chatterbox_project(project_id, {"progress": 70})
+        if len(audio_chunks) > 1:
+            print(f"Concatenating {len(audio_chunks)} audio chunks...")
+            
+            # Read all chunks
+            audio_arrays = []
+            sample_rate = None
+            for chunk_buffer in audio_chunks:
+                chunk_buffer.seek(0)
+                audio_data, sr = sf.read(chunk_buffer)
+                audio_arrays.append(audio_data)
+                if sample_rate is None:
+                    sample_rate = sr
+            
+            # Concatenate
+            combined_audio = np.concatenate(audio_arrays)
+            
+            # Write to buffer
+            audio_buffer = io.BytesIO()
+            sf.write(audio_buffer, combined_audio, sample_rate, format='WAV')
+            audio_buffer.seek(0)
+        else:
+            audio_buffer = audio_chunks[0]
+        
+        # Save to temp file
+        db.update_chatterbox_project(project_id, {"progress": 70})
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
+            tmp_audio.write(audio_buffer.read())
+            audio_path = tmp_audio.name
+        
+        # Upload to Cloudinary
+        db.update_chatterbox_project(project_id, {"progress": 85})
+        public_id = f"chatterbox_tts/{project_id}"
+        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id)
+        
+        # Save to volume
+        try:
+            output_dir = Path("/outputs/chatterbox/tts")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(audio_path, output_dir / f"{project_id}.wav")
+        except Exception as e:
+            print(f"Warning: Failed to save to volume: {e}")
+        
+        # Cleanup
+        import os
+        os.unlink(audio_path)
+        
+        # Update DB
+        db.update_chatterbox_project(project_id, {
+            "audio_url": audio_url,
+            "status": "completed",
+            "progress": 100
+        })
+        
+        print(f"Chatterbox TTS project {project_id} completed")
+        
+    except Exception as e:
+        print(f"Error in Chatterbox TTS {project_id}: {e}")
+        try:
+            db = SupabaseService()
+            db.update_chatterbox_project(project_id, {"status": "failed", "error_message": str(e)})
+        except:
+            pass
+        raise e
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: model_volume, OUTPUT_DIR: output_volume},
+    secrets=[
+        modal.Secret.from_name("supabase-secrets"),
+        modal.Secret.from_name("cloudinary-secrets")
+    ],
+    timeout=600,
+    gpu="A10G"
+)
+def process_chatterbox_multilingual(
+    project_id: str,
+    text: str,
+    language_id: str,
+    voice_sample_id: str,
+    exaggeration: float,
+    temperature: float,
+    cfg_weight: float,
+    repetition_penalty: float,
+    min_p: float,
+    top_p: float
+):
+    """Background task for Chatterbox Multilingual TTS."""
+    print(f"Processing Chatterbox Multilingual project {project_id} ({language_id})...")
+    
+    import tempfile
+    import uuid
+    from pathlib import Path
+    import shutil
+    import io
+    import soundfile as sf
+    import numpy as np
+    from services.audio_ai.tts.chatterbox.multilingual_service import ChatterboxMultilingualService
+    from services.audio_ai.voice_library.voice_manager import VoiceManager
+    from services.audio_ai.tts.text_chunker import TextChunker
+    from services.supabase_service import SupabaseService
+    from services.cloudinary_service import CloudinaryService
+    
+    try:
+        db = SupabaseService()
+        cloudinary = CloudinaryService()
+        tts_service = ChatterboxMultilingualService()
+        voice_manager = VoiceManager()
+        
+        db.update_chatterbox_project(project_id, {"status": "processing", "progress": 10})
+        
+        # Get voice sample URL if provided
+        voice_url = None
+        if voice_sample_id:
+            voice_sample = voice_manager.get_voice_sample(voice_sample_id)
+            if voice_sample:
+                voice_url = voice_sample["audio_url"]
+        
+        # Check if text needs chunking (> 800 chars)
+        chunker = TextChunker(max_chunk_size=800)
+        chunks = chunker.split_text(text)
+        
+        print(f"Text split into {len(chunks)} chunks")
+        
+        # Generate audio for each chunk
+        db.update_chatterbox_project(project_id, {"progress": 30})
+        audio_chunks = []
+        
+        for i, chunk in enumerate(chunks):
+            chunk_progress = 30 + int((i / len(chunks)) * 40)  # Progress from 30% to 70%
+            db.update_chatterbox_project(project_id, {"progress": chunk_progress})
+            
+            print(f"Generating chunk {i+1}/{len(chunks)}: '{chunk[:50]}...'")
+            
+            chunk_buffer = tts_service.generate_audio(
+                text=chunk,
+                language_id=language_id,
+                voice_sample_url=voice_url,
+                exaggeration=exaggeration,
+                temperature=temperature,
+                cfg_weight=cfg_weight,
+                repetition_penalty=repetition_penalty,
+                min_p=min_p,
+                top_p=top_p
+            )
+            audio_chunks.append(chunk_buffer)
+        
+        # Concatenate audio chunks if multiple
+        db.update_chatterbox_project(project_id, {"progress": 70})
+        if len(audio_chunks) > 1:
+            print(f"Concatenating {len(audio_chunks)} audio chunks...")
+            
+            # Read all chunks
+            audio_arrays = []
+            sample_rate = None
+            for chunk_buffer in audio_chunks:
+                chunk_buffer.seek(0)
+                audio_data, sr = sf.read(chunk_buffer)
+                audio_arrays.append(audio_data)
+                if sample_rate is None:
+                    sample_rate = sr
+            
+            # Concatenate
+            combined_audio = np.concatenate(audio_arrays)
+            
+            # Write to buffer
+            audio_buffer = io.BytesIO()
+            sf.write(audio_buffer, combined_audio, sample_rate, format='WAV')
+            audio_buffer.seek(0)
+        else:
+            audio_buffer = audio_chunks[0]
+        
+        # Save and upload
+        db.update_chatterbox_project(project_id, {"progress": 70})
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
+            tmp_audio.write(audio_buffer.read())
+            audio_path = tmp_audio.name
+        
+        db.update_chatterbox_project(project_id, {"progress": 85})
+        public_id = f"chatterbox_multilingual/{project_id}"
+        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id)
+        
+        # Save to volume
+        try:
+            output_dir = Path("/outputs/chatterbox/multilingual")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(audio_path, output_dir / f"{project_id}.wav")
+        except Exception as e:
+            print(f"Warning: Failed to save to volume: {e}")
+        
+        # Cleanup
+        import os
+        os.unlink(audio_path)
+        
+        # Update DB
+        db.update_chatterbox_project(project_id, {
+            "audio_url": audio_url,
+            "status": "completed",
+            "progress": 100
+        })
+        
+        print(f"Multilingual TTS project {project_id} completed")
+        
+    except Exception as e:
+        print(f"Error in Multilingual TTS {project_id}: {e}")
+        try:
+            db = SupabaseService()
+            db.update_chatterbox_project(project_id, {"status": "failed", "error_message": str(e)})
+        except:
+            pass
+        raise e
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: model_volume, OUTPUT_DIR: output_volume},
+    secrets=[
+        modal.Secret.from_name("supabase-secrets"),
+        modal.Secret.from_name("cloudinary-secrets")
+    ],
+    timeout=600,
+    gpu="A10G"
+)
+def process_voice_conversion(
+    project_id: str,
+    source_audio_url: str,
+    target_voice_sample_id: str
+):
+    """Background task for Voice Conversion."""
+    print(f"Processing Voice Conversion project {project_id}...")
+    
+    import tempfile
+    from pathlib import Path
+    import shutil
+    from services.audio_ai.tts.chatterbox.vc_service import ChatterboxVCService
+    from services.audio_ai.voice_library.voice_manager import VoiceManager
+    from services.supabase_service import SupabaseService
+    from services.cloudinary_service import CloudinaryService
+    
+    try:
+        db = SupabaseService()
+        cloudinary = CloudinaryService()
+        vc_service = ChatterboxVCService()
+        voice_manager = VoiceManager()
+        
+        db.update_chatterbox_project(project_id, {"status": "processing", "progress": 10})
+        
+        # Get target voice URL
+        voice_sample = voice_manager.get_voice_sample(target_voice_sample_id)
+        if not voice_sample:
+            raise Exception(f"Voice sample {target_voice_sample_id} not found")
+        
+        target_voice_url = voice_sample["audio_url"]
+        
+        # Convert voice via microservice
+        db.update_chatterbox_project(project_id, {"progress": 50})
+        audio_buffer = vc_service.convert_voice(
+            source_audio_url=source_audio_url,  # Pass URLs directly to microservice
+            target_voice_url=target_voice_url
+        )
+        
+        # Save and upload
+        db.update_chatterbox_project(project_id, {"progress": 80})
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
+            tmp_audio.write(audio_buffer.read())
+            audio_path = tmp_audio.name
+        
+        public_id = f"voice_conversion/{project_id}"
+        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id)
+        
+        # Save to volume
+        try:
+            output_dir = Path("/outputs/chatterbox/vc")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(audio_path, output_dir / f"{project_id}.wav")
+        except Exception as e:
+            print(f"Warning: Failed to save to volume: {e}")
+        
+        # Cleanup
+        import os
+        os.unlink(audio_path)
+        
+        # Update DB
+        db.update_chatterbox_project(project_id, {
+            "audio_url": audio_url,
+            "status": "completed",
+            "progress": 100
+        })
+        
+        print(f"Voice Conversion project {project_id} completed")
+        
+    except Exception as e:
+        print(f"Error in Voice Conversion {project_id}: {e}")
+        try:
+            db = SupabaseService()
+            db.update_chatterbox_project(project_id, {"status": "failed", "error_message": str(e)})
+        except:
+            pass
         raise e
