@@ -134,9 +134,9 @@ sv (Swedish), sw (Swahili), tr (Turkish), zh (Chinese)
 
 ---
 
-## 🔄 Voice Conversion
+## 🔄 Voice Changer
 
-### Convert Voice (URL)
+### Change Voice (URL)
 **Endpoint:** `POST /api/v1/audio/voice-conversion/convert`
 
 **Request:**
@@ -148,7 +148,7 @@ sv (Swedish), sw (Swahili), tr (Turkish), zh (Chinese)
 }
 ```
 
-### Convert Voice (File Upload)
+### Change Voice (File Upload)
 **Endpoint:** `POST /api/v1/audio/voice-conversion/convert-upload`  
 **Content-Type:** `multipart/form-data`
 
@@ -245,7 +245,7 @@ curl https://your-url/api/v1/audio/chatterbox/projects/project-uuid
 ### `chatterbox_projects` Table
 - `id` (uuid, primary key)
 - `user_id` (text)
-- `project_type` (text): 'tts', 'multilingual_tts', 'voice_conversion'
+- `project_type` (text): 'tts', 'multilingual_tts', 'voice_conversion' (Voice Changer)
 - `text` (text)
 - `language_id` (text)
 - `voice_sample_id` (uuid, foreign key)

@@ -41,11 +41,11 @@ audio = tts.generate(
 
 ---
 
-### 2. **ChatterboxVC** (Voice Conversion)
+### 2. **ChatterboxVC** (Voice Changer)
 File: `vc.py`
 
 **Capabilities:**
-- ✅ **Voice Conversion**: Convert audio dari satu voice ke voice lain
+- ✅ **Voice Changer**: Convert audio dari satu voice ke voice lain
 - ✅ **Real-time Voice Changing**: Bisa untuk voice changer
 - ✅ **Any-to-Any**: Tidak perlu training, langsung bisa convert
 
@@ -148,7 +148,7 @@ audio = mtl_tts.generate(
 
 ---
 
-### **Priority 3: Voice Conversion Service**
+### **Priority 3: Voice Changer Service**
 **Value Proposition:** Convert existing audio/video ke voice lain.
 
 **Implementation:**
@@ -175,7 +175,7 @@ audio = mtl_tts.generate(
 |---------|--------|------------|
 | **Languages** | ~9 | **23** ✅ |
 | **Voice Cloning** | ❌ | **✅** |
-| **Voice Conversion** | ❌ | **✅** |
+| **Voice Changer** | ❌ | **✅** |
 | **Emotion Control** | ❌ | **✅** |
 | **Model Size** | 82M | Larger (better quality) |
 | **Speed** | Fast | Moderate |
@@ -195,7 +195,7 @@ audio = mtl_tts.generate(
 2. Update API documentation
 3. Test dengan berbagai bahasa
 
-### Phase 3: Voice Conversion (Week 3)
+### Phase 3: Voice Changer (Week 3)
 1. Implement VC service
 2. Add endpoint: `POST /api/v1/vc/convert`
 3. Integration dengan video dubbing
@@ -212,7 +212,7 @@ audio = mtl_tts.generate(
 1. **Cross-lingual Voice Cloning**: Clone voice di English, generate di 22 bahasa lain
 2. **Voice Consistency**: Semua content dengan voice yang sama
 3. **Emotion Control**: Bisa adjust ekspresi sesuai context
-4. **Voice Conversion**: Convert existing audio ke voice baru
+4. **Voice Changer**: Convert existing audio ke voice baru
 5. **23 Languages**: Jauh lebih banyak dari kompetitor
 
 ---

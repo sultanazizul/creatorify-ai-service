@@ -55,7 +55,7 @@ Content-Type: application/json
 **Supported Languages:**
 ar, da, de, el, en, es, fi, fr, he, hi, it, ja, ko, ms, nl, no, pl, pt, ru, sv, sw, tr, zh
 
-### 4. Voice Conversion
+### 4. Voice Changer
 ```
 POST /vc/convert
 Content-Type: application/json

@@ -56,6 +56,10 @@ class ChatterboxVCService:
                 logger.info("Voice conversion completed via microservice")
                 return buffer
                 
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Error calling Chatterbox VC microservice: {e}")
+            logger.error(f"Response details: {e.response.text}")
+            raise e
         except Exception as e:
             logger.error(f"Error calling Chatterbox VC microservice: {e}")
             raise e

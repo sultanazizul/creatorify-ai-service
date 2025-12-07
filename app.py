@@ -968,24 +968,48 @@ def process_voice_conversion(
         voice_sample = voice_manager.get_voice_sample(target_voice_sample_id)
         if not voice_sample:
             raise Exception(f"Voice sample {target_voice_sample_id} not found")
-        
         target_voice_url = voice_sample["audio_url"]
         
         # Convert voice via microservice
         db.update_chatterbox_project(project_id, {"progress": 50})
+        
+        print(f"Calling Voice Conversion microservice...")
+        print(f"Source audio URL: {source_audio_url}")
+        print(f"Target voice URL: {target_voice_url}")
+        
         audio_buffer = vc_service.convert_voice(
             source_audio_url=source_audio_url,  # Pass URLs directly to microservice
             target_voice_url=target_voice_url
         )
         
+        print(f"Received audio buffer from microservice")
+        
+        # Validate audio buffer
+        if not audio_buffer or audio_buffer.getbuffer().nbytes == 0:
+            raise Exception("Microservice returned empty audio buffer")
+        
+        print(f"Audio buffer size: {audio_buffer.getbuffer().nbytes} bytes")
+        
         # Save and upload
         db.update_chatterbox_project(project_id, {"progress": 80})
+        print(f"Uploading converted audio to Cloudinary...")
+        
+        # Save to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
-            tmp_audio.write(audio_buffer.read())
+            audio_data = audio_buffer.read()
+            tmp_audio.write(audio_data)
             audio_path = tmp_audio.name
         
+        # Verify audio is different from source (simple size check)
+        import hashlib
+        audio_hash = hashlib.md5(audio_data).hexdigest()
+        print(f"Converted audio hash: {audio_hash}")
+        print(f"Converted audio path: {audio_path}")
+        
         public_id = f"voice_conversion/{project_id}"
+        print(f"Uploading to Cloudinary with public_id: {public_id}")
         audio_url = cloudinary.upload_audio(audio_path, public_id=public_id)
+        print(f"Cloudinary returned URL: {audio_url}")
         
         # Save to volume
         try:

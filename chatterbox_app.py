@@ -264,45 +264,55 @@ def voice_conversion(request: VoiceConversionRequest):
         
         # Download source audio
         logger.info(f"Downloading source audio from {request.source_audio_url}")
-        response = requests.get(request.source_audio_url)
+        response = requests.get(request.source_audio_url, timeout=60)
         response.raise_for_status()
         
+        # Check file size (limit to ~10MB to prevent OOM)
+        if len(response.content) > 10 * 1024 * 1024:
+             raise HTTPException(status_code=400, detail="Source audio too large (max 10MB)")
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
             f.write(response.content)
             source_path = f.name
         
-        # Download target voice
-        logger.info(f"Downloading target voice from {request.target_voice_url}")
-        response = requests.get(request.target_voice_url)
-        response.raise_for_status()
+        try:
+            # Download target voice
+            logger.info(f"Downloading target voice from {request.target_voice_url}")
+            response = requests.get(request.target_voice_url, timeout=60)
+            response.raise_for_status()
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+                f.write(response.content)
+                target_path = f.name
+            
+            try:
+                # Perform voice conversion
+                logger.info("Performing voice conversion...")
+                audio_tensor = vc_model.generate(
+                    audio=source_path,
+                    target_voice_path=target_path
+                )
+                
+                # Convert to WAV
+                audio_np = audio_tensor.squeeze().cpu().numpy()
+                buffer = io.BytesIO()
+                sf.write(buffer, audio_np, vc_model.sr, format='WAV')
+                buffer.seek(0)
+                
+                logger.info("Voice conversion completed")
+                return Response(content=buffer.read(), media_type="audio/wav")
+            finally:
+                if os.path.exists(target_path):
+                    os.remove(target_path)
+        finally:
+            if os.path.exists(source_path):
+                os.remove(source_path)
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-            f.write(response.content)
-            target_path = f.name
-        
-        # Perform voice conversion
-        logger.info("Performing voice conversion...")
-        audio_tensor = vc_model.convert(
-            source_path=source_path,
-            target_path=target_path
-        )
-        
-        # Convert to WAV
-        audio_np = audio_tensor.squeeze().cpu().numpy()
-        buffer = io.BytesIO()
-        sf.write(buffer, audio_np, vc_model.sr, format='WAV')
-        buffer.seek(0)
-        
-        # Cleanup temp files
-        os.remove(source_path)
-        os.remove(target_path)
-        
-        logger.info("Voice conversion completed")
-        return Response(content=buffer.read(), media_type="audio/wav")
-        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error in voice conversion: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in voice conversion: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Voice conversion failed: {str(e)}")
 
 
 # Deploy FastAPI app on Modal
