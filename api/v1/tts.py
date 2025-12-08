@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from services.tts_service import TTSService
 from services.supabase_service import SupabaseService
 from services.cloudinary_service import CloudinaryService
+from services.kokoro_voices import get_all_languages, get_all_voices, get_voices_by_language, get_language_info
 from fastapi.responses import StreamingResponse
 import tempfile
 import os
@@ -75,6 +76,79 @@ async def generate_tts(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/languages")
+async def list_languages():
+    """
+    Get list of all supported languages.
+    Returns language code, name, and technical details.
+    """
+    return {
+        "languages": get_all_languages(),
+        "total": len(get_all_languages())
+    }
+
+@router.get("/languages/{lang_code}")
+async def get_language(lang_code: str):
+    """
+    Get information about a specific language.
+    Returns language details including G2P method and fallback.
+    """
+    language = get_language_info(lang_code)
+    if not language:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Language code '{lang_code}' not found. Available codes: a, b, e, f, h, i, p, j, z"
+        )
+    return language
+
+@router.get("/voices")
+async def list_voices(lang_code: str = None):
+    """
+    Get list of all available voices.
+    Optionally filter by language code.
+    
+    Query Parameters:
+    - lang_code: Filter voices by language (e.g., 'a' for American English)
+    """
+    if lang_code:
+        voices = get_voices_by_language(lang_code)
+        if not voices:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No voices found for language code '{lang_code}'"
+            )
+        return {
+            "voices": voices,
+            "language": get_language_info(lang_code),
+            "total": len(voices)
+        }
+    else:
+        all_voices = get_all_voices()
+        return {
+            "voices": all_voices,
+            "total": len(all_voices)
+        }
+
+@router.get("/voices/{lang_code}")
+async def get_voices_for_language(lang_code: str):
+    """
+    Get all voices for a specific language.
+    Returns list of voices with their details.
+    """
+    language = get_language_info(lang_code)
+    if not language:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Language code '{lang_code}' not found"
+        )
+    
+    voices = get_voices_by_language(lang_code)
+    return {
+        "language": language,
+        "voices": voices,
+        "total": len(voices)
+    }
 
 @router.get("/")
 async def list_tts(

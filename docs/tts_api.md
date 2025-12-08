@@ -178,6 +178,238 @@ Deletes a TTS project record from the database.
 
 ---
 
+### 5. Get Available Languages
+Retrieves a list of all supported languages.
+
+- **URL**: `/api/v1/tts/languages`
+- **Method**: `GET`
+
+#### Response (200 OK)
+```json
+{
+  "languages": [
+    {
+      "code": "a",
+      "name": "American English",
+      "full_code": "en-us",
+      "g2p": "misaki[en]",
+      "fallback": "espeak-ng en-us"
+    },
+    {
+      "code": "b",
+      "name": "British English",
+      "full_code": "en-gb",
+      "g2p": "misaki[en]",
+      "fallback": "espeak-ng en-gb"
+    },
+    ...
+  ],
+  "total": 9
+}
+```
+
+---
+
+### 6. Get Language Details
+Retrieves detailed information about a specific language.
+
+- **URL**: `/api/v1/tts/languages/{lang_code}`
+- **Method**: `GET`
+
+#### Path Parameters
+| Parameter | Type | Description |
+|---|---|------|
+| `lang_code` | string | Language code (a, b, e, f, h, i, p, j, z) |
+
+#### Response (200 OK)
+```json
+{
+  "code": "a",
+  "name": "American English",
+  "full_code": "en-us",
+  "g2p": "misaki[en]",
+  "fallback": "espeak-ng en-us"
+}
+```
+
+#### Response (404 Not Found)
+```json
+{
+  "detail": "Language code 'x' not found. Available codes: a, b, e, f, h, i, p, j, z"
+}
+```
+
+---
+
+### 7. Get Available Voices
+Retrieves a list of all available voices, optionally filtered by language.
+
+- **URL**: `/api/v1/tts/voices`
+- **Method**: `GET`
+
+#### Query Parameters
+| Parameter | Type | Required | Description |
+|---|---|---|------|
+| `lang_code` | string | No | Filter voices by language code |
+
+#### Response (200 OK) - All Voices
+```json
+{
+  "voices": [
+    {
+      "id": "af_heart",
+      "name": "Heart (Female)",
+      "gender": "female",
+      "lang": "a"
+    },
+    {
+      "id": "af_bella",
+      "name": "Bella (Female)",
+      "gender": "female",
+      "lang": "a"
+    },
+    ...
+  ],
+  "total": 35
+}
+```
+
+#### Response (200 OK) - Filtered by Language
+```json
+{
+  "voices": [
+    {
+      "id": "af_heart",
+      "name": "Heart (Female)",
+      "gender": "female",
+      "lang": "a"
+    },
+    {
+      "id": "am_michael",
+      "name": "Michael (Male)",
+      "gender": "male",
+      "lang": "a"
+    }
+  ],
+  "language": {
+    "code": "a",
+    "name": "American English",
+    "full_code": "en-us",
+    "g2p": "misaki[en]",
+    "fallback": "espeak-ng en-us"
+  },
+  "total": 9
+}
+```
+
+---
+
+### 8. Get Voices for Language
+Retrieves all voices available for a specific language.
+
+- **URL**: `/api/v1/tts/voices/{lang_code}`
+- **Method**: `GET`
+
+#### Path Parameters
+| Parameter | Type | Description |
+|---|---|------|
+| `lang_code` | string | Language code (a, b, e, f, h, i, p, j, z) |
+
+#### Response (200 OK)
+```json
+{
+  "language": {
+    "code": "a",
+    "name": "American English",
+    "full_code": "en-us",
+    "g2p": "misaki[en]",
+    "fallback": "espeak-ng en-us"
+  },
+  "voices": [
+    {
+      "id": "af_heart",
+      "name": "Heart (Female)",
+      "gender": "female",
+      "lang": "a"
+    },
+    {
+      "id": "af_bella",
+      "name": "Bella (Female)",
+      "gender": "female",
+      "lang": "a"
+    },
+    {
+      "id": "am_michael",
+      "name": "Michael (Male)",
+      "gender": "male",
+      "lang": "a"
+    }
+  ],
+  "total": 9
+}
+```
+
+#### Response (404 Not Found)
+```json
+{
+  "detail": "Language code 'x' not found"
+}
+```
+
+---
+
+## Supported Languages
+
+| Code | Language | Full Code | Voices Available |
+|------|----------|-----------|------------------|
+| `a` | American English | en-us | 9 voices (5F, 4M) |
+| `b` | British English | en-gb | 6 voices (3F, 3M) |
+| `e` | Spanish | es | 2 voices (1F, 1M) |
+| `f` | French | fr-fr | 1 voice (1F) |
+| `h` | Hindi | hi | 2 voices (1F, 1M) |
+| `i` | Italian | it | 2 voices (1F, 1M) |
+| `p` | Brazilian Portuguese | pt-br | 2 voices (1F, 1M) |
+| `j` | Japanese | ja | 2 voices (1F, 1M) |
+| `z` | Mandarin Chinese | zh | 2 voices (1F, 1M) |
+
+## Available Voices by Language
+
+### American English (a)
+- **Female**: `af_heart`, `af_bella`, `af_sarah`, `af_nicole`, `af_sky`, `af`
+- **Male**: `am_adam`, `am_michael`, `am`
+
+### British English (b)
+- **Female**: `bf_emma`, `bf_isabella`, `bf`
+- **Male**: `bm_george`, `bm_lewis`, `bm`
+
+### Japanese (j)
+- **Female**: `jf`
+- **Male**: `jm`
+
+### Mandarin Chinese (z)
+- **Female**: `zf`
+- **Male**: `zm`
+
+### Spanish (e)
+- **Female**: `ef`
+- **Male**: `em`
+
+### French (f)
+- **Female**: `ff`
+
+### Hindi (h)
+- **Female**: `hf`
+- **Male**: `hm`
+
+### Italian (i)
+- **Female**: `if`
+- **Male**: `im`
+
+### Brazilian Portuguese (p)
+- **Female**: `pf`
+- **Male**: `pm`
+
+
 ## Database Schema (Supabase)
 The `tts_projects` table schema:
 - `id` (uuid, primary key)
