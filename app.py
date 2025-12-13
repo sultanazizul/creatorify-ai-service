@@ -2,8 +2,9 @@ import modal
 import os
 import time
 from fastapi import FastAPI
-from api.v1 import projects, status, avatars, tts
-from api.v1.audio import voice_library, chatterbox_tts, voice_conversion
+from api.v1.routers import avatars
+from api.v1.routers.video.talking_head import projects, status
+from api.v1.routers.audio import kokoro as tts, chatterbox as chatterbox_tts, voice_conversion, voice_library
 
 # Define the new App class
 app = modal.App("creatorify-api")
@@ -18,14 +19,15 @@ OUTPUT_DIR = "/outputs"
 # Define the custom image
 image = (
     modal.Image.from_registry("pytorch/pytorch:2.4.1-cuda12.1-cudnn9-devel")
-    .env({"HF_HUB_ETAG_TIMEOUT": "60", "PYTHONPATH": "/root:/root/infinitetalk"})
-    .add_local_dir("infinitetalk", "/root/infinitetalk", copy=True)
+    .env({"HF_HUB_ETAG_TIMEOUT": "60", "PYTHONPATH": "/root:/root/vendor/infinitetalk:/root/vendor"})
+    .add_local_dir("vendor", "/root/vendor", copy=True)
     .add_local_dir("api", "/root/api", copy=True)
+    .add_local_dir("core", "/root/core", copy=True)
     .add_local_dir("services", "/root/services", copy=True)
     .add_local_dir("models", "/root/models", copy=True)
-    .add_local_dir("utils", "/root/utils", copy=True)
+
     .apt_install("git", "ffmpeg", "git-lfs", "libmagic1")
-    .run_commands("sed -i 's/from inspect import ArgSpec/# from inspect import ArgSpec  # Removed for Python 3.11 compatibility/' /root/infinitetalk/wan/multitalk.py")
+    .run_commands("sed -i 's/from inspect import ArgSpec/# from inspect import ArgSpec  # Removed for Python 3.11 compatibility/' /root/vendor/infinitetalk/wan/multitalk.py")
     .pip_install(
         "misaki[en]", "ninja", "psutil", "packaging", "flash_attn==2.7.4.post1",
         "pydantic", "python-magic", "huggingface_hub", "soundfile", "librosa",
@@ -33,7 +35,7 @@ image = (
         "xfuser==0.4.1",
         "httpx"  # For calling Chatterbox microservice
     )
-    .pip_install_from_requirements("infinitetalk/requirements.txt")
+    .pip_install_from_requirements("vendor/infinitetalk/requirements.txt")
 )
 
 # --- GPU Model Class ---
@@ -76,7 +78,7 @@ class Model:
         # Add module paths for imports
         import sys
         from pathlib import Path
-        sys.path.extend(["/root", "/root/infinitetalk"])
+        sys.path.extend(["/root", "/root/vendor/infinitetalk", "/root/vendor"])
         
         from huggingface_hub import snapshot_download, hf_hub_download
 
@@ -262,7 +264,7 @@ class Model:
     @modal.method()
     def _generate_video(self, image: bytes, audio1: bytes, audio2: bytes = None, audio_order: str = "left_right", prompt: str | None = None, params: dict = None) -> str:
         import sys
-        sys.path.extend(["/root", "/root/infinitetalk"])
+        sys.path.extend(["/root", "/root/vendor/infinitetalk", "/root/vendor"])
         from PIL import Image as PILImage
         import io
         import tempfile
@@ -274,7 +276,7 @@ class Model:
         import os
         import shutil
         from pathlib import Path
-        from infinitetalk.generate_infinitetalk import generate
+        from vendor.infinitetalk.generate_infinitetalk import generate
         import librosa
 
         params = params or {}
@@ -461,6 +463,56 @@ class Model:
         # Spawn generation
         return self._generate_video.spawn(image_bytes, audio1_bytes, audio2_bytes, audio_order, prompt, params)
 
+# --- Upload to Cloudinary Function ---
+@app.function(
+    image=image,
+    volumes={OUTPUT_DIR: output_volume},
+    timeout=600
+)
+def upload_video_to_cloudinary(project_id: str, output_filename: str):
+    """Upload video from volume to Cloudinary and update database."""
+    from services.infrastructure.cloudinary import CloudinaryService
+    from services.infrastructure.supabase import SupabaseService
+    
+    try:
+        output_path = f"{OUTPUT_DIR}/talking_video/{output_filename}"
+        print(f"[UPLOAD] Reading video from: {output_path}")
+        
+        if not os.path.exists(output_path):
+            error_msg = f"Video file not found: {output_path}"
+            print(f"[ERROR] {error_msg}")
+            db = SupabaseService()
+            db.update_status(project_id, "failed", error_message=error_msg)
+            return None
+        
+        # Upload to Cloudinary
+        cloudinary = CloudinaryService()
+        print(f"[UPLOAD] Uploading to Cloudinary...")
+        video_url = cloudinary.upload_video(output_path, public_id=f"project_{project_id}")
+        
+        if video_url:
+            print(f"[UPLOAD] Success! Video URL: {video_url}")
+            # Update database
+            db = SupabaseService()
+            db.update_status(project_id, "finished", 100, video_url=video_url)
+            return video_url
+        else:
+            error_msg = "Cloudinary upload failed"
+            print(f"[ERROR] {error_msg}")
+            db = SupabaseService()
+            db.update_status(project_id, "failed", error_message=error_msg)
+            return None
+            
+    except Exception as e:
+        import traceback
+        error_msg = f"Upload error: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        db = SupabaseService()
+        db.update_status(project_id, "failed", error_message=error_msg)
+        return None
+
+
 # --- FastAPI App ---
 @app.function(
     image=image,
@@ -562,9 +614,9 @@ def process_tts_task(tts_id: str, text: str, voice: str, speed: float, lang_code
     import tempfile
     from pathlib import Path
     import shutil
-    from services.tts_service import TTSService
-    from services.supabase_service import SupabaseService
-    from services.cloudinary_service import CloudinaryService
+    from services.audio.tts.kokoro.service import TTSService
+    from services.infrastructure.supabase import SupabaseService
+    from services.infrastructure.cloudinary import CloudinaryService
     
     try:
         # Initialize services
@@ -667,11 +719,11 @@ def process_chatterbox_tts(
     import io
     import soundfile as sf
     import numpy as np
-    from services.audio_ai.tts.chatterbox.tts_service import ChatterboxTTSService
-    from services.audio_ai.voice_library.voice_manager import VoiceManager
-    from services.audio_ai.tts.text_chunker import TextChunker
-    from services.supabase_service import SupabaseService
-    from services.cloudinary_service import CloudinaryService
+    from services.audio.tts.chatterbox.tts_service import ChatterboxTTSService
+    from services.audio.voice_library.voice_manager import VoiceManager
+    from services.audio.tts.text_chunker import TextChunker
+    from services.infrastructure.supabase import SupabaseService
+    from services.infrastructure.cloudinary import CloudinaryService
     
     try:
         db = SupabaseService()
@@ -815,11 +867,11 @@ def process_chatterbox_multilingual(
     import io
     import soundfile as sf
     import numpy as np
-    from services.audio_ai.tts.chatterbox.multilingual_service import ChatterboxMultilingualService
-    from services.audio_ai.voice_library.voice_manager import VoiceManager
-    from services.audio_ai.tts.text_chunker import TextChunker
-    from services.supabase_service import SupabaseService
-    from services.cloudinary_service import CloudinaryService
+    from services.audio.tts.chatterbox.multilingual_service import ChatterboxMultilingualService
+    from services.audio.voice_library.voice_manager import VoiceManager
+    from services.audio.tts.text_chunker import TextChunker
+    from services.infrastructure.supabase import SupabaseService
+    from services.infrastructure.cloudinary import CloudinaryService
     
     try:
         db = SupabaseService()
@@ -951,10 +1003,10 @@ def process_voice_conversion(
     import tempfile
     from pathlib import Path
     import shutil
-    from services.audio_ai.tts.chatterbox.vc_service import ChatterboxVCService
-    from services.audio_ai.voice_library.voice_manager import VoiceManager
-    from services.supabase_service import SupabaseService
-    from services.cloudinary_service import CloudinaryService
+    from services.audio.tts.chatterbox.vc_service import ChatterboxVCService
+    from services.audio.voice_library.voice_manager import VoiceManager
+    from services.infrastructure.supabase import SupabaseService
+    from services.infrastructure.cloudinary import CloudinaryService
     
     try:
         db = SupabaseService()
