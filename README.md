@@ -1,96 +1,179 @@
-# Creatorify AI Service - All-in-One Content Creation Platform
+# Creatorify AI Service
 
-Creatorify AI is a comprehensive, modular platform designed to power the next generation of content creation tools. It leverages state-of-the-art open-source AI models to provide capabilities across Audio, Video, and Image domains.
+Platform all-in-one untuk pembuatan konten AI yang mencakup **Text-to-Speech (TTS)**, **Voice Cloning**, **Voice Conversion**, dan **AI Avatar Video Generation**. Dibangun dengan arsitektur domain-driven yang modular dan scalable.
 
-## 🚀 Features
+## 🎯 Fitur Utama
 
-### 🎥 AI Video
-- **Talking Head Generation**: Create realistic talking head videos from a single image and audio input using the Wan2.1 model (via InfiniteTalk).
-- **Multi-Person Conversations**: Support for multiple audio inputs to create conversational videos.
+### 🎙️ Audio Domain
+- **Kokoro TTS** - Text-to-speech multilingual dengan 9 bahasa
+- **Chatterbox Voice Cloning** - Voice cloning dengan kualitas tinggi
+- **Multilingual TTS** - TTS dalam 23 bahasa dengan voice cloning
+- **Voice Conversion** - Konversi suara dari audio ke target voice
+- **Voice Library** - Manajemen voice samples
 
-### 🎙️ AI Audio
-- **Text-to-Speech (TTS)**: High-quality TTS using **Kokoro-82M** and **Chatterbox**.
-- **Voice Cloning**: Clone voices from a short audio sample.
-- **Voice Conversion**: Convert one voice to another while preserving intonation.
-- **Multilingual Support**: Generate speech in over 20 languages.
+### 🎬 Video Domain
+- **Talking Head Generation** - Generate video avatar berbicara dari gambar + audio
+- **Multi-Person Support** - Support 2 orang dalam satu video
+- **Audio Order Control** - Kontrol urutan audio (left-right, right-left, meanwhile)
 
-### 🖼️ AI Image (Coming Soon)
-- Image generation and editing capabilities.
+## 🏗️ Arsitektur
 
-## 🏗️ Architecture
-
-The project follows a Domain-Driven Design (DDD) approach to ensure scalability and maintainability.
+Project ini menggunakan **Domain-Driven Design (DDD)** dengan pemisahan yang jelas antara domain Audio dan Video:
 
 ```
 creatorify-ai-service/
-├── api/                # API Layer (FastAPI routers)
-│   └── v1/
-│       └── routers/    # Domain-specific routes (Audio, Video, Projects)
-├── core/               # Core configurations and utilities
-├── services/           # Business Logic Layer
-│   ├── audio/          # Audio domain services (TTS, VC, Cloning)
-│   ├── video/          # Video domain services (Talking Head)
-│   └── infrastructure/ # External services (Supabase, Cloudinary)
-├── models/             # Data Models (Pydantic & DB)
-└── docs/               # Detailed Documentation
+├── api/v1/routers/          # API Endpoints
+│   ├── audio/               # Audio endpoints (TTS, Voice Cloning, dll)
+│   └── video/talking_head/  # Video endpoints (Talking Head)
+├── core/                    # Core logic (Config, Security)
+├── models/                  # Data Models (Pydantic schemas)
+│   ├── audio/              # Audio request/response models
+│   └── video/              # Video request/response models
+├── services/               # Business Logic
+│   ├── audio/             # Audio services
+│   ├── video/             # Video services
+│   └── infrastructure/    # External services (Supabase, Cloudinary)
+├── vendor/                # External libraries
+│   ├── chatterbox/       # Chatterbox TTS library
+│   └── infinitetalk/     # InfiniteTalk video library
+├── tests/                # Verification scripts
+└── docs/                 # Documentation
+
 ```
 
-## 🛠️ Tech Stack
+## 📚 Dokumentasi
 
-- **Framework**: FastAPI (Python)
-- **Infrastructure**: Modal.com (Serverless GPU computing)
-- **Database**: Supabase (PostgreSQL)
-- **Storage**: Cloudinary (Media assets) & Modal Volumes (Model weights)
-- **AI Models**:
-    - Video: Wan2.1 (InfiniteTalk)
-    - Audio: Kokoro-82M, Chatterbox
+- **[Struktur Project](docs/PROJECT_STRUCTURE.md)** - Penjelasan detail struktur folder
+- **[Arsitektur](docs/ARCHITECTURE.md)** - Desain sistem high-level
+- **[API Documentation](docs/API.md)** - Daftar endpoint yang tersedia
+- **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Panduan untuk developer
 
-## 📖 Documentation
-
-- **[Project Structure](docs/PROJECT_STRUCTURE.md)**: Detailed explanation of folders and files.
-- **[Architecture](docs/ARCHITECTURE.md)**: High-level system design.
-- **[API Documentation](docs/API.md)**: List of available endpoints.
-- **[Developer Guide](docs/DEVELOPER_GUIDE.md)**: How to contribute and add features.
-
-## ⚡ Getting Started
+## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.10+
-- Modal account and CLI configured
-- Supabase project
-- Cloudinary account
 
-### Installation
+- Python 3.11+
+- Modal account ([modal.com](https://modal.com))
+- Supabase account (untuk database)
+- Cloudinary account (untuk media storage)
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-repo/creatorify-ai-service.git
-   cd creatorify-ai-service
-   ```
+### Setup Environment
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Set up secrets in Modal:
-   ```bash
-   modal secret create supabase-secrets DB_URL=... DB_KEY=...
-   modal secret create cloudinary-secrets CLOUDINARY_URL=...
-   ```
-
-### Running the API
-
-Deploy the app to Modal:
+1. **Clone repository**
 ```bash
+git clone https://github.com/sultanazizul/creatorify-ai-service.git
+cd creatorify-ai-service
+```
+
+2. **Install Modal CLI**
+```bash
+pip install modal
+modal setup
+```
+
+3. **Set Environment Variables**
+
+Buat secret di Modal dengan nama `creatorify-secrets` yang berisi:
+- `API_KEY` - API key untuk authentication
+- `SUPABASE_URL` - URL Supabase project
+- `SUPABASE_KEY` - Supabase service key
+- `CLOUDINARY_CLOUD_NAME` - Cloudinary cloud name
+- `CLOUDINARY_API_KEY` - Cloudinary API key
+- `CLOUDINARY_API_SECRET` - Cloudinary API secret
+
+### Deploy
+
+```bash
+# Deploy aplikasi utama
 modal deploy app.py
+
+# Deploy Chatterbox microservice
+modal deploy chatterbox_app.py
 ```
 
-Or run interactively for development:
+## 🔌 API Endpoints
+
+### Audio Endpoints
+
+**Kokoro TTS**
+- `POST /api/v1/tts/generate` - Generate TTS
+- `GET /api/v1/tts/languages` - List bahasa yang didukung
+- `GET /api/v1/tts/voices` - List voice yang tersedia
+
+**Chatterbox**
+- `POST /api/v1/audio/chatterbox/tts/generate` - Voice cloning TTS
+- `POST /api/v1/audio/chatterbox/multilingual/generate` - Multilingual TTS
+- `POST /api/v1/audio/voice-conversion/convert` - Voice conversion
+
+**Voice Library**
+- `POST /api/v1/audio/voice-library/upload` - Upload voice sample
+- `GET /api/v1/audio/voice-library/` - List voice samples
+
+### Video Endpoints
+
+**Talking Head**
+- `POST /api/v1/projects` - Create video project
+- `GET /api/v1/projects/{id}/status` - Check project status
+- `GET /api/v1/projects` - List projects
+
+### Avatar Management
+- `POST /api/v1/avatars/upload` - Upload avatar image
+- `GET /api/v1/avatars/` - List avatars
+- `DELETE /api/v1/avatars/{id}` - Delete avatar
+
+## 🛠️ Development
+
+### Menambahkan Fitur Baru
+
+1. **Audio Feature** - Tambahkan di `api/v1/routers/audio/` dan `services/audio/`
+2. **Video Feature** - Tambahkan di `api/v1/routers/video/` dan `services/video/`
+3. **Data Models** - Definisikan di `models/audio/` atau `models/video/`
+
+Lihat [Developer Guide](docs/DEVELOPER_GUIDE.md) untuk detail lengkap.
+
+### Testing
+
 ```bash
-modal serve app.py
+# Test TTS locally
+python tests/verify_tts.py
 ```
+
+## 🔐 Authentication
+
+Semua endpoint memerlukan API Key di header:
+```
+X-API-Key: your-api-key-here
+```
+
+## 📦 Tech Stack
+
+- **Framework**: FastAPI
+- **Deployment**: Modal (Serverless GPU)
+- **Database**: Supabase (PostgreSQL)
+- **Storage**: Cloudinary
+- **AI Models**:
+  - Kokoro-82M (TTS)
+  - Chatterbox (Voice Cloning)
+  - InfiniteTalk (Talking Head)
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see the [Developer Guide](docs/DEVELOPER_GUIDE.md) for details on how to add new features or models.
+Contributions are welcome! Please read our [Developer Guide](docs/DEVELOPER_GUIDE.md) first.
+
+## 📄 License
+
+[Add your license here]
+
+## 🙏 Acknowledgments
+
+- [Kokoro-82M](https://github.com/hexgrad/kokoro) - TTS model
+- [Chatterbox](https://github.com/resemble-ai/chatterbox) - Voice cloning
+- [InfiniteTalk](https://github.com/MeiGen-AI/InfiniteTalk) - Talking head generation
+
+## 📞 Support
+
+For issues and questions, please open an issue on GitHub.
+
+---
+
+Made with ❤️ by Sultan Azizul
