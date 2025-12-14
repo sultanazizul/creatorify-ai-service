@@ -1,0 +1,54 @@
+# Web Framework
+fastapi
+uvicorn
+python-multipart
+httpx
+
+# Core & Utils
+modal
+pydantic
+python-magic
+loguru
+click
+tqdm
+requests
+packaging
+psutil
+ninja
+
+# Database & Cloud
+supabase
+cloudinary
+
+# Audio & Video Processing
+soundfile
+librosa
+numba==0.60.0
+opencv-python>=4.9.0.80
+imageio
+imageio-ffmpeg
+moviepy==1.0.3
+scenedetect
+# decord
+pyloudnorm
+
+# AI & Machine Learning
+torch
+numpy<2
+transformers>=4.49.0
+diffusers>=0.31.0
+accelerate>=1.1.1
+tokenizers>=0.20.3
+safetensors
+huggingface_hub
+scikit-image
+easydict
+ftfy
+
+# TTS Support
+misaki[en]
+
+# Optional / Linux / GPU Only (Commented out for Mac compatibility)
+# flash_attn==2.7.4.post1
+# xformers==0.0.28
+# xfuser>=0.4.1

@@ -11,7 +11,6 @@ creatorify-ai-service/
 ├── docs/                   # Project Documentation
 ├── models/                 # Data Models (Pydantic Schemas)
 ├── services/               # Business Logic & External Services
-├── tests/                  # Verification & Test Scripts
 ├── vendor/                 # Third-party/External Libraries
 ├── app.py                  # Main Application Entry Point (Modal App)
 └── README.md               # Project Overview
@@ -62,10 +61,6 @@ Contains the core business logic and integrations with external services.
 Contains external libraries or cloned repositories that are not available via `pip` or require custom modification.
 - `chatterbox/`: Chatterbox TTS library.
 - `infinitetalk/`: InfiniteTalk (Talking Head) library.
-
-### 6. `tests/` (Testing)
-Contains scripts for verifying functionality.
-- `verify_tts.py`: Script to test TTS generation locally.
 
 ### 7. Root Files
 - **`app.py`**: The heart of the application.

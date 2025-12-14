@@ -52,7 +52,7 @@ creatorify-ai-service/
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11 (Recommended) - *Note: Python 3.13 is not yet fully supported by some AI libraries*
 - Modal account ([modal.com](https://modal.com))
 - Supabase account (untuk database)
 - Cloudinary account (untuk media storage)
@@ -71,7 +71,13 @@ pip install modal
 modal setup
 ```
 
-3. **Set Environment Variables**
+3. **Install Dependencies (Opsional, untuk development lokal)**
+   Untuk development lokal atau testing, install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Set Environment Variables**
 
 Buat secret di Modal dengan nama `creatorify-secrets` yang berisi:
 - `API_KEY` - API key untuk authentication
@@ -131,12 +137,33 @@ modal deploy chatterbox_app.py
 
 Lihat [Developer Guide](docs/DEVELOPER_GUIDE.md) untuk detail lengkap.
 
-### Testing
 
-```bash
-# Test TTS locally
-python tests/verify_tts.py
-```
+
+### Troubleshooting Installation (macOS)
+
+If you encounter `llvmlite` errors or issues with `torch`:
+
+1.  **Install dependencies via Homebrew:**
+    ```bash
+    brew install cmake llvm@15
+    ```
+
+2.  **Uninstall conflicting pip packages:**
+    ```bash
+    pip uninstall -y cmake
+    ```
+
+3.  **Install `llvmlite` linking to LLVM 15:**
+    ```bash
+    export CMAKE_PREFIX_PATH="$(brew --prefix llvm@15)"
+    export LLVM_CONFIG="$(brew --prefix llvm@15)/bin/llvm-config"
+    pip install llvmlite
+    ```
+
+4.  **Install remaining requirements:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
 ## 🔐 Authentication
 
