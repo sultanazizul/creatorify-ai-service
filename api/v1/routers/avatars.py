@@ -23,6 +23,7 @@ class AvatarResponse(BaseModel):
     user_id: str
     name: str
     image_url: str
+    is_public: bool = False
     created_at: Optional[str] = None
 
 @router.post("/upload", response_model=AvatarResponse)
@@ -30,6 +31,7 @@ async def upload_avatar(
     name: str = Form(...),
     file: UploadFile = File(...),
     user_id: str = Form("anonymous"),
+    is_public: bool = Form(False),
     db: SupabaseService = Depends(get_db),
     cloudinary: CloudinaryService = Depends(get_cloudinary)
 ):
@@ -63,7 +65,7 @@ async def upload_avatar(
         
         # Save to Supabase
         try:
-            avatar = db.create_avatar(name, image_url, user_id)
+            avatar = db.create_avatar(name, image_url, user_id, is_public)
         except Exception as db_error:
             # Re-raise with specific message
             raise HTTPException(status_code=500, detail=f"Database error: {str(db_error)}")

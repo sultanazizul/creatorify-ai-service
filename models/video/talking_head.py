@@ -12,6 +12,7 @@ class GenerationParams(BaseModel):
     color_correction_strength: float = Field(0.2, description="Color correction strength")
     seed: Optional[int] = Field(None, description="Random seed")
     frame_num: Optional[int] = Field(None, description="Force specific frame number (advanced)")
+    num_persistent_param_in_dit: Optional[int] = Field(None, description="Number of persistent parameters in DiT")
 
 class ProjectCreate(BaseModel):
     user_id: str = "anonymous"

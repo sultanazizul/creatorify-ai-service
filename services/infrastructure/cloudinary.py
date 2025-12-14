@@ -72,6 +72,23 @@ class CloudinaryService:
             print(f"Error uploading audio to Cloudinary: {e}")
             return None
 
+    def upload_file_obj(self, file_obj, resource_type: str = "auto", public_id: str = None, folder: str = None) -> dict:
+        if not self.enabled:
+            return None
+            
+        try:
+            print(f"Uploading file object to Cloudinary (folder={folder})...")
+            response = cloudinary.uploader.upload(
+                file_obj, 
+                resource_type=resource_type,
+                public_id=public_id,
+                folder=folder
+            )
+            return response
+        except Exception as e:
+            print(f"Error uploading file object to Cloudinary: {e}")
+            return None
+
     def delete_resource(self, public_id: str, resource_type: str = "image") -> bool:
         if not self.enabled:
             return False

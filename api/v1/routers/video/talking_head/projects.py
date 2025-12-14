@@ -18,48 +18,34 @@ async def create_project(
     db: SupabaseService = Depends(get_db)
 ):
     """
-    Create a new video generation project.
+    Create a new video generation project (JSON).
     1. Save to DB (queued)
     2. Submit to Modal (async)
     """
-    # Import here to avoid circular imports if Model is in app.py
-    # We assume 'app' module is available and has 'Model'
     try:
         from app import Model
     except ImportError:
-        # Fallback for local testing or if structure differs
+        # Fallback
         raise HTTPException(status_code=500, detail="Model class not found")
 
-    # 1. Create DB entry (initial)
-    # We need a call_id, but we get it after spawning. 
-    # Strategy: Create DB entry with pending call_id, then update? 
-    # Or spawn first? Spawning is fast.
-    
     try:
-        # Prepare arguments for the model
-        # We need to convert Pydantic model to what Model expects
-        # The Model.submit expects GenerationRequest (or similar arguments)
-        # We'll adapt the Model.submit to take these args or map them here.
-        
-        # For now, let's assume we map it to the existing signature or a new one.
-        # We'll spawn the job.
-        
-        # Note: We are passing URLs. The Model._download_and_validate handles them.
-        # Fix: Instantiate the class before spawning
-        # Fix: Convert Pydantic model to dict for Modal
+        # Pydantic model to dict
         params_dict = project.parameters.dict() if project.parameters else {}
+        
+        # Default or override params
+        # Note: num_persistent_param_in_dit is handled in app.py if inside params_dict
         
         job = Model().submit.spawn(
             image_url=project.image_url,
             audio_url=project.audio_url,
-            audio_url_2=project.audio_url_2, # Pass second audio if available
-            audio_order=project.audio_order, # Pass audio order
+            audio_url_2=project.audio_url_2, 
+            audio_order=project.audio_order, 
             prompt=project.prompt,
             params=params_dict
         )
         call_id = job.object_id
         
-        # 2. Save to DB
+        # Save to DB
         db_project = db.create_project(project, call_id, user_id=project.user_id)
         
         if not db_project:

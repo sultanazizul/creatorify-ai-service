@@ -109,14 +109,15 @@ class SupabaseService:
             print(f"Error deleting project: {e}")
             return False
 
-    def create_avatar(self, name: str, image_url: str, user_id: str = "anonymous") -> dict:
+    def create_avatar(self, name: str, image_url: str, user_id: str = "anonymous", is_public: bool = False) -> dict:
         if not self.client:
-            return {"avatar_id": "mock-id", "name": name, "image_url": image_url}
+            return {"avatar_id": "mock-id", "name": name, "image_url": image_url, "is_public": is_public}
             
         data = {
             "user_id": user_id,
             "name": name,
             "image_url": image_url,
+            "is_public": is_public
         }
         
         try:
@@ -145,8 +146,13 @@ class SupabaseService:
             return []
         
         query = self.client.table("avatars").select("*").order("created_at", desc=True).limit(limit)
-        if user_id:
-            query = query.eq("user_id", user_id)
+        
+        if user_id and user_id != "anonymous":
+            # Show public avatars OR user's own avatars
+            query = query.or_(f"user_id.eq.{user_id},is_public.eq.true")
+        else:
+            # Only show public avatars if no user_id (or anonymous)
+            query = query.eq("is_public", True)
             
         try:
             response = query.execute()

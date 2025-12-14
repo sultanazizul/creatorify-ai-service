@@ -4,6 +4,7 @@ import time
 from fastapi import FastAPI
 from api.v1.routers import avatars
 from api.v1.routers.video.talking_head import projects, status
+from api.v1.routers import upload
 from api.v1.routers.audio import kokoro as tts, chatterbox as chatterbox_tts, voice_conversion, voice_library
 
 # Define the new App class
@@ -405,7 +406,7 @@ class Model:
             sample_shift=params.get('sample_shift', 3.0),
             sample_text_guide_scale=params.get('sample_text_guide_scale', 1.0),
             sample_audio_guide_scale=params.get('sample_audio_guide_scale', 6.0),
-            num_persistent_param_in_dit=500000000,
+            num_persistent_param_in_dit=params.get('num_persistent_param_in_dit') if params.get('num_persistent_param_in_dit') is not None else 500000000,
             audio_mode="localfile",
             use_teacache=True,
             teacache_thresh=0.3,
@@ -537,6 +538,7 @@ def fastapi_app():
     web_app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
     web_app.include_router(status.router, prefix="/api/v1/projects", tags=["status"])
     web_app.include_router(avatars.router, prefix="/api/v1/avatars", tags=["avatars"])
+    web_app.include_router(upload.router, prefix="/api/v1/upload", tags=["upload"])
     web_app.include_router(tts.router, prefix="/api/v1/tts", tags=["tts"])
     
     # Chatterbox routers
