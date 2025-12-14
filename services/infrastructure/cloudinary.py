@@ -20,52 +20,52 @@ class CloudinaryService:
             print("Warning: Cloudinary credentials not set. Uploads will be skipped.")
             self.enabled = False
 
-    def upload_video(self, file_path: str, public_id: str = None) -> str:
+    def upload_video(self, file_path: str, public_id: str = None, folder: str = None) -> str:
         if not self.enabled:
             return None
             
         try:
-            print(f"Uploading {file_path} to Cloudinary...")
+            print(f"Uploading {file_path} to Cloudinary (folder={folder})...")
             response = cloudinary.uploader.upload(
                 file_path, 
                 resource_type="video",
                 public_id=public_id,
-                folder="infinitetalk_outputs"
+                folder=folder
             )
             return response.get("secure_url")
         except Exception as e:
             print(f"Error uploading to Cloudinary: {e}")
             return None
 
-    def upload_image(self, file_path: str, public_id: str = None) -> str:
+    def upload_image(self, file_path: str, public_id: str = None, folder: str = None) -> str:
         if not self.enabled:
             return None
             
         try:
-            print(f"Uploading {file_path} to Cloudinary...")
+            print(f"Uploading {file_path} to Cloudinary (folder={folder})...")
             response = cloudinary.uploader.upload(
                 file_path, 
                 resource_type="image",
                 public_id=public_id,
-                folder="infinitetalk_avatars"
+                folder=folder
             )
             return response.get("secure_url")
         except Exception as e:
             print(f"Error uploading image to Cloudinary: {e}")
             return None
 
-    def upload_audio(self, file_path: str, public_id: str = None) -> str:
+    def upload_audio(self, file_path: str, public_id: str = None, folder: str = None) -> str:
         if not self.enabled:
             return None
             
         try:
-            print(f"Uploading {file_path} to Cloudinary...")
+            print(f"Uploading {file_path} to Cloudinary (folder={folder})...")
             # Cloudinary treats audio as "video" resource type usually, or "auto"
             response = cloudinary.uploader.upload(
                 file_path, 
                 resource_type="video", 
                 public_id=public_id,
-                folder="infinitetalk_tts"
+                folder=folder
             )
             return response.get("secure_url")
         except Exception as e:

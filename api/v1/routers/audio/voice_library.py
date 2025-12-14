@@ -74,8 +74,12 @@ async def upload_voice_sample(
         duration = len(audio) / sr
         
         # Upload to Cloudinary
-        public_id = f"voice_samples/{user_id}_{uuid.uuid4()}"
-        audio_url = cloudinary.upload_audio(tmp_path, public_id=public_id)
+        # Determine folder based on hierarchy
+        folder = "Creatorify/Voice Sample/Public" if is_public else "Creatorify/Voice Sample/Users"
+
+        # Upload to Cloudinary
+        public_id = f"{user_id}_{uuid.uuid4()}" # Removed prefix, let folder handle organization
+        audio_url = cloudinary.upload_audio(tmp_path, public_id=public_id, folder=folder)
         
         # Clean up temp file
         os.unlink(tmp_path)

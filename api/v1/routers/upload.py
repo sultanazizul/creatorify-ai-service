@@ -19,13 +19,11 @@ async def upload_file(
 
     try:
         # Determine folder based on resource type or mime type
-        folder = "infinitetalk_uploads"
+        folder = "Creatorify/Temp Files"
         if resource_type == "image" or (file.content_type and file.content_type.startswith("image/")):
-            folder = "infinitetalk_avatars"
             resource_type = "image"
         elif resource_type == "video" or (file.content_type and file.content_type.startswith("audio/")) or (file.content_type and file.content_type.startswith("video/")):
              # Cloudinary treats audio as video usually
-            folder = "infinitetalk_tts"
             resource_type = "video"
 
         response = cloudinary.upload_file_obj(

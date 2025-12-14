@@ -35,21 +35,41 @@ async def create_project(
         # Default or override params
         # Note: num_persistent_param_in_dit is handled in app.py if inside params_dict
         
+        # Save to DB first to get ID
+        # Convert Pydantic model to dict for DB creation
+        # We don't have call_id yet, but we will update it later or pass "pending"
+        db_project = db.create_project(project, call_id="pending", user_id=project.user_id)
+        
+        if not db_project:
+             raise HTTPException(status_code=500, detail="Failed to save project to DB")
+        
+        project_id = db_project["id"]
+
         job = Model().submit.spawn(
             image_url=project.image_url,
             audio_url=project.audio_url,
             audio_url_2=project.audio_url_2, 
             audio_order=project.audio_order, 
             prompt=project.prompt,
-            params=params_dict
+            params=params_dict,
+            project_id=project_id  # Pass generated ID
         )
         call_id = job.object_id
         
-        # Save to DB
-        db_project = db.create_project(project, call_id, user_id=project.user_id)
-        
-        if not db_project:
-             raise HTTPException(status_code=500, detail="Failed to save project to DB")
+        # Update DB with call_id
+        # We need a method to update project fields other than status/progress
+        # Assuming db.update_status can be used or we add a new method.
+        # Check services/infrastructure/supabase.py: update_status updates specific fields.
+        # We might need to add a generic update_project method or update call_id via raw query if needed.
+        # For now, let's assume call_id is less critical for the user than project_id for upload.
+        # But good to have. Using a raw query update here for simplicity if needed, or add to SupabaseService.
+        try:
+             db.client.table("projects").update({"call_id": call_id}).eq("id", project_id).execute()
+        except:
+             pass # Not critical
+             
+        # Add call_id to response
+        db_project["call_id"] = call_id
              
         return db_project
 

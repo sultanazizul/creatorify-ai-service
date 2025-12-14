@@ -263,7 +263,7 @@ class Model:
             raise
 
     @modal.method()
-    def _generate_video(self, image: bytes, audio1: bytes, audio2: bytes = None, audio_order: str = "left_right", prompt: str | None = None, params: dict = None) -> str:
+    def _generate_video(self, image: bytes, audio1: bytes, audio2: bytes = None, audio_order: str = "left_right", prompt: str | None = None, params: dict = None, project_id: str = None) -> str:
         import sys
         sys.path.extend(["/root", "/root/vendor/infinitetalk", "/root/vendor"])
         from PIL import Image as PILImage
@@ -445,11 +445,19 @@ class Model:
         if audio2_path:
             os.unlink(audio2_path)
         os.unlink(image_path)
+        
+        # Trigger Cloudinary Upload if project_id is provided
+        final_file_name = f"{output_filename}.mp4"
+        if project_id:
+            print(f"Triggering Cloudinary upload for project {project_id}...")
+            upload_video_to_cloudinary.spawn(project_id, final_file_name)
+        else:
+            print("Warning: No project_id provided, skipping Cloudinary upload.")
 
-        return output_filename + ".mp4"
+        return final_file_name
 
     @modal.method()
-    def submit(self, image_url: str, audio_url: str, audio_url_2: str = None, audio_order: str = "left_right", prompt: str = None, params: dict = None):
+    def submit(self, image_url: str, audio_url: str, audio_url_2: str = None, audio_order: str = "left_right", prompt: str = None, params: dict = None, project_id: str = None):
         # Download inputs
         image_bytes = self._download_and_validate(image_url, [
             "image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff",
@@ -462,7 +470,7 @@ class Model:
             audio2_bytes = self._download_and_validate(audio_url_2, ["audio/mpeg", "audio/wav", "audio/x-wav"])
         
         # Spawn generation
-        return self._generate_video.spawn(image_bytes, audio1_bytes, audio2_bytes, audio_order, prompt, params)
+        return self._generate_video.spawn(image_bytes, audio1_bytes, audio2_bytes, audio_order, prompt, params, project_id)
 
 # --- Upload to Cloudinary Function ---
 @app.function(
@@ -482,19 +490,34 @@ def upload_video_to_cloudinary(project_id: str, output_filename: str):
         if not os.path.exists(output_path):
             error_msg = f"Video file not found: {output_path}"
             print(f"[ERROR] {error_msg}")
-            db = SupabaseService()
-            db.update_status(project_id, "failed", error_message=error_msg)
-            return None
+        # Determine output folder hierarchy for Infinitalk
+        # Path: Creatorify/AI Video Output/Talking Video/Infinitalk/{Tipe}
+        # Tipe: Single person vs Multiperson
+        db = SupabaseService()
+        project = db.get_project(project_id)
+        if not project:
+            print(f"[UPLOAD] Warning: Project {project_id} not found in DB. Defaulting to Single person.")
+            video_type = "Single person"
+        else:
+             # Logic to determine type: check if audio_url_2 is present in parameters or top level
+             # Project structure from DB might vary, checking "parameters" JSON
+             params = project.get("parameters", {})
+             if project.get("audio_url_2") or params.get("audio_url_2"):
+                 video_type = "Multiperson"
+             else:
+                 video_type = "Single person"
         
+        folder = f"Creatorify/AI Video Output/Talking Video/Infinitalk/{video_type}"
+
         # Upload to Cloudinary
         cloudinary = CloudinaryService()
-        print(f"[UPLOAD] Uploading to Cloudinary...")
-        video_url = cloudinary.upload_video(output_path, public_id=f"project_{project_id}")
+        print(f"[UPLOAD] Uploading to Cloudinary (folder={folder})...")
+        video_url = cloudinary.upload_video(output_path, public_id=f"project_{project_id}", folder=folder)
         
         if video_url:
             print(f"[UPLOAD] Success! Video URL: {video_url}")
             # Update database
-            db = SupabaseService()
+            # db already initialized above
             db.update_status(project_id, "finished", 100, video_url=video_url)
             return video_url
         else:
@@ -651,7 +674,11 @@ def process_tts_task(tts_id: str, text: str, voice: str, speed: float, lang_code
         db.update_tts(tts_id, {"progress": 80})
         
         public_id = f"tts_{uuid.uuid4()}"
-        audio_url = cloudinary.upload_audio(tmp_path, public_id=public_id)
+        
+        # Path: Creatorify/AI Audio Output/Kokoro82/
+        folder = "Creatorify/AI Audio Output/Kokoro82"
+        
+        audio_url = cloudinary.upload_audio(tmp_path, public_id=public_id, folder=folder)
         
         if not audio_url:
             raise Exception("Failed to upload audio to Cloudinary")
@@ -805,7 +832,11 @@ def process_chatterbox_tts(
         # Upload to Cloudinary
         db.update_chatterbox_project(project_id, {"progress": 85})
         public_id = f"chatterbox_tts/{project_id}"
-        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id)
+        
+        # Path: Creatorify/AI Audio Output/Chatterbox/TTS Voice Cloning/
+        folder = "Creatorify/AI Audio Output/Chatterbox/TTS Voice Cloning"
+        
+        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id, folder=folder)
         
         # Save to volume
         try:
@@ -952,7 +983,11 @@ def process_chatterbox_multilingual(
         
         db.update_chatterbox_project(project_id, {"progress": 85})
         public_id = f"chatterbox_multilingual/{project_id}"
-        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id)
+        
+        # Path: Creatorify/AI Audio Output/Chatterbox/Multilingual/
+        folder = "Creatorify/AI Audio Output/Chatterbox/Multilingual"
+        
+        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id, folder=folder)
         
         # Save to volume
         try:
@@ -1062,7 +1097,11 @@ def process_voice_conversion(
         
         public_id = f"voice_conversion/{project_id}"
         print(f"Uploading to Cloudinary with public_id: {public_id}")
-        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id)
+        
+        # Path: Creatorify/AI Audio Output/Chatterbox/Voice Changer/
+        folder = "Creatorify/AI Audio Output/Chatterbox/Voice Changer"
+        
+        audio_url = cloudinary.upload_audio(audio_path, public_id=public_id, folder=folder)
         print(f"Cloudinary returned URL: {audio_url}")
         
         # Save to volume

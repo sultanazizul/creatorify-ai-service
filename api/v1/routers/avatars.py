@@ -58,8 +58,11 @@ async def upload_avatar(
         raise HTTPException(status_code=500, detail=f"Failed to process uploaded file: {e}")
 
     try:
+        # Determine folder based on hierarchy
+        folder = "Creatorify/Avatar Assets/Public" if is_public else "Creatorify/Avatar Assets/Users"
+        
         # Upload to Cloudinary
-        image_url = cloudinary.upload_image(tmp_path)
+        image_url = cloudinary.upload_image(tmp_path, folder=folder)
         if not image_url:
             raise HTTPException(status_code=500, detail="Failed to upload image to Cloudinary. Check server logs for details.")
         
