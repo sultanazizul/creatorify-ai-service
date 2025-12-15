@@ -476,6 +476,10 @@ class Model:
 @app.function(
     image=image,
     volumes={OUTPUT_DIR: output_volume},
+    secrets=[
+        modal.Secret.from_name("supabase-secrets"),
+        modal.Secret.from_name("cloudinary-secrets")
+    ],
     timeout=600
 )
 def upload_video_to_cloudinary(project_id: str, output_filename: str):
@@ -496,16 +500,16 @@ def upload_video_to_cloudinary(project_id: str, output_filename: str):
         db = SupabaseService()
         project = db.get_project(project_id)
         if not project:
-            print(f"[UPLOAD] Warning: Project {project_id} not found in DB. Defaulting to Single person.")
-            video_type = "Single person"
+            print(f"[UPLOAD] Warning: Project {project_id} not found in DB. Defaulting to Single Person.")
+            video_type = "Single Person"
         else:
-             # Logic to determine type: check if audio_url_2 is present in parameters or top level
-             # Project structure from DB might vary, checking "parameters" JSON
-             params = project.get("parameters", {})
-             if project.get("audio_url_2") or params.get("audio_url_2"):
-                 video_type = "Multiperson"
+             # Logic to determine type based on project "type" field
+             # Mapping: multi_person -> Multi Person, single_person -> Single Person
+             p_type = project.get("type", "single_person")
+             if p_type == "multi_person":
+                 video_type = "Multi Person"
              else:
-                 video_type = "Single person"
+                 video_type = "Single Person"
         
         folder = f"Creatorify/AI Video Output/Talking Video/Infinitalk/{video_type}"
 
