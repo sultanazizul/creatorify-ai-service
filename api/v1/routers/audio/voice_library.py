@@ -4,7 +4,7 @@ Endpoints for managing voice samples (upload, list, delete).
 """
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 import tempfile
 import os
 import uuid
@@ -36,6 +36,15 @@ class VoiceSampleResponse(BaseModel):
     duration_seconds: Optional[float]
     user_id: str
     created_at: str
+
+class PaginatedVoiceSampleResponse(BaseModel):
+    items: List[Dict[str, Any]] # We return dict items from manager, then formatted. Or just List[VoiceSampleResponse] if we format it before returning envelope?
+    # VoiceManager now returns Dict envelope.
+    # But list_voice_samples logic renames 'id' to 'voice_sample_id'.
+    # We should keep it consistent.
+    items: List[Dict[str, Any]]
+    next_cursor: Optional[str]
+    has_more: bool
 
 
 @router.post("/upload", response_model=VoiceSampleResponse)
@@ -117,26 +126,34 @@ async def upload_voice_sample(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/")
+@router.get("/", response_model=PaginatedVoiceSampleResponse)
 async def list_voice_samples(
     user_id: str = None,
     include_public: bool = True,
     limit: int = 50,
+    cursor: str = None,
     voice_manager: VoiceManager = Depends(get_voice_manager)
 ):
     """List voice samples."""
-    samples = voice_manager.list_voice_samples(
+    result = voice_manager.list_voice_samples(
         user_id=user_id,
         include_public=include_public,
-        limit=limit
+        limit=limit,
+        cursor=cursor
     )
     
+    items = result.get("items", [])
+    
     # Rename id to voice_sample_id
-    for sample in samples:
+    for sample in items:
         if "id" in sample:
             sample["voice_sample_id"] = sample.pop("id")
     
-    return samples
+    return {
+        "items": items,
+        "next_cursor": result.get("next_cursor"),
+        "has_more": result.get("has_more")
+    }
 
 
 @router.get("/{voice_sample_id}")

@@ -26,6 +26,11 @@ class AvatarResponse(BaseModel):
     is_public: bool = False
     created_at: Optional[str] = None
 
+class PaginatedAvatarResponse(BaseModel):
+    items: List[AvatarResponse]
+    next_cursor: Optional[str]
+    has_more: bool
+
 @router.post("/upload", response_model=AvatarResponse)
 async def upload_avatar(
     name: str = Form(...),
@@ -132,10 +137,17 @@ async def delete_avatar(
         
     return {"detail": "Avatar deleted successfully"}
 
-@router.get("/", response_model=List[AvatarResponse])
+@router.get("/", response_model=PaginatedAvatarResponse)
 async def list_avatars(
     user_id: str = None,
     limit: int = 20,
+    cursor: str = None,
     db: SupabaseService = Depends(get_db)
 ):
-    return db.list_avatars(user_id, limit)
+    result = db.list_avatars(user_id, limit, cursor=cursor)
+    
+    return {
+        "items": result.get("items", []),
+        "next_cursor": result.get("next_cursor"),
+        "has_more": result.get("has_more")
+    }

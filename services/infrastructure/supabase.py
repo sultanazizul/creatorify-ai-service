@@ -90,11 +90,16 @@ class SupabaseService:
         except Exception as e:
             print(f"Error updating status: {e}")
 
-    def list_projects(self, user_id: str = None, limit: int = 20, project_type: str = None):
+    def list_projects(self, user_id: str = None, limit: int = 20, project_type: str = None, cursor: str = None):
         if not self.client:
-            return []
+            return {"items": [], "next_cursor": None, "has_more": False}
         
-        query = self.client.table("projects").select("*").order("created_at", desc=True).limit(limit)
+        # Fetch limit + 1 to check for next page
+        query = self.client.table("projects").select("*").order("created_at", desc=True).limit(limit + 1)
+        
+        if cursor:
+            query = query.lt("created_at", cursor)
+            
         if user_id:
             query = query.eq("user_id", user_id)
         if project_type:
@@ -102,10 +107,24 @@ class SupabaseService:
             
         try:
             response = query.execute()
-            return response.data
+            data = response.data
+            
+            has_more = False
+            next_cursor = None
+            
+            if len(data) > limit:
+                has_more = True
+                data = data[:limit]
+                next_cursor = data[-1]["created_at"]
+                
+            return {
+                "items": data,
+                "next_cursor": next_cursor,
+                "has_more": has_more
+            }
         except Exception as e:
             print(f"Error listing projects: {e}")
-            return []
+            return {"items": [], "next_cursor": None, "has_more": False}
 
     def delete_project(self, project_id: str) -> bool:
         if not self.client:
@@ -152,11 +171,14 @@ class SupabaseService:
             print(f"Error getting avatar: {e}")
             return None
 
-    def list_avatars(self, user_id: str = None, limit: int = 20):
+    def list_avatars(self, user_id: str = None, limit: int = 20, cursor: str = None):
         if not self.client:
-            return []
+             return {"items": [], "next_cursor": None, "has_more": False}
         
-        query = self.client.table("avatars").select("*").order("created_at", desc=True).limit(limit)
+        query = self.client.table("avatars").select("*").order("created_at", desc=True).limit(limit + 1)
+        
+        if cursor:
+            query = query.lt("created_at", cursor)
         
         if user_id and user_id != "anonymous":
             # Show public avatars OR user's own avatars
@@ -167,10 +189,24 @@ class SupabaseService:
             
         try:
             response = query.execute()
-            return response.data
+            data = response.data
+            
+            has_more = False
+            next_cursor = None
+            
+            if len(data) > limit:
+                has_more = True
+                data = data[:limit]
+                next_cursor = data[-1]["created_at"]
+                
+            return {
+                "items": data,
+                "next_cursor": next_cursor,
+                "has_more": has_more
+            }
         except Exception as e:
             print(f"Error listing avatars: {e}")
-            return []
+            return {"items": [], "next_cursor": None, "has_more": False}
 
     def delete_avatar(self, avatar_id: str) -> bool:
         if not self.client:
@@ -252,20 +288,38 @@ class SupabaseService:
             print(f"Error getting TTS project: {e}")
             return None
 
-    def list_tts(self, user_id: str = None, limit: int = 20):
+    def list_tts(self, user_id: str = None, limit: int = 20, cursor: str = None):
         if not self.client:
-            return []
+             return {"items": [], "next_cursor": None, "has_more": False}
         
-        query = self.client.table("tts_projects").select("*").order("created_at", desc=True).limit(limit)
+        query = self.client.table("tts_projects").select("*").order("created_at", desc=True).limit(limit + 1)
+        
+        if cursor:
+            query = query.lt("created_at", cursor)
+            
         if user_id:
             query = query.eq("user_id", user_id)
             
         try:
             response = query.execute()
-            return response.data
+            data = response.data
+            
+            has_more = False
+            next_cursor = None
+            
+            if len(data) > limit:
+                has_more = True
+                data = data[:limit]
+                next_cursor = data[-1]["created_at"]
+                
+            return {
+                "items": data,
+                "next_cursor": next_cursor,
+                "has_more": has_more
+            }
         except Exception as e:
             print(f"Error listing TTS projects: {e}")
-            return []
+            return {"items": [], "next_cursor": None, "has_more": False}
 
     def delete_tts(self, tts_id: str) -> bool:
         if not self.client:
@@ -363,12 +417,15 @@ class SupabaseService:
             print(f"Error getting Chatterbox project: {e}")
             return None
 
-    def list_chatterbox_projects(self, user_id: str = None, project_type: str = None, limit: int = 50) -> list:
+    def list_chatterbox_projects(self, user_id: str = None, project_type: str = None, limit: int = 50, cursor: str = None) -> dict:
         """List Chatterbox projects."""
         if not self.client:
-            return []
+             return {"items": [], "next_cursor": None, "has_more": False}
         
-        query = self.client.table("chatterbox_projects").select("*").order("created_at", desc=True).limit(limit)
+        query = self.client.table("chatterbox_projects").select("*").order("created_at", desc=True).limit(limit + 1)
+        
+        if cursor:
+             query = query.lt("created_at", cursor)
         
         if user_id:
             query = query.eq("user_id", user_id)
@@ -377,10 +434,24 @@ class SupabaseService:
         
         try:
             response = query.execute()
-            return response.data
+            data = response.data
+            
+            has_more = False
+            next_cursor = None
+            
+            if len(data) > limit:
+                has_more = True
+                data = data[:limit]
+                next_cursor = data[-1]["created_at"]
+                
+            return {
+                "items": data,
+                "next_cursor": next_cursor,
+                "has_more": has_more
+            }
         except Exception as e:
             print(f"Error listing Chatterbox projects: {e}")
-            return []
+            return {"items": [], "next_cursor": None, "has_more": False}
 
     def delete_chatterbox_project(self, project_id: str) -> bool:
         """Delete a Chatterbox project."""

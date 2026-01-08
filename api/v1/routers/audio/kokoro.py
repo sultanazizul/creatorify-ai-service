@@ -7,7 +7,9 @@ from services.audio.tts.kokoro.voices import get_all_languages, get_all_voices, 
 from fastapi.responses import StreamingResponse
 import tempfile
 import os
+import os
 import uuid
+from typing import List, Dict, Any, Optional
 
 router = APIRouter()
 tts_service = TTSService()
@@ -21,6 +23,11 @@ def get_cloudinary():
     return CloudinaryService()
 
 from models.audio.tts import KokoroTTSRequest as TTSRequest
+
+class PaginatedTTSProjectList(BaseModel):
+    items: List[Dict[str, Any]]
+    next_cursor: Optional[str]
+    has_more: bool
 
 @router.post("/generate")
 async def generate_tts(
@@ -145,17 +152,20 @@ async def get_voices_for_language(lang_code: str):
         "total": len(voices)
     }
 
-@router.get("/")
+@router.get("/", response_model=PaginatedTTSProjectList)
 async def list_tts(
     user_id: str = None, 
     limit: int = 20,
+    cursor: str = None,
     db: SupabaseService = Depends(get_db)
 ):
     """List TTS projects."""
-    projects = db.list_tts(user_id, limit)
+    result = db.list_tts(user_id, limit, cursor=cursor)
+    items = result.get("items", [])
+    
     # Rename id to tts_id and format pipeline
     formatted_projects = []
-    for p in projects:
+    for p in items:
         if "id" in p:
             p["tts_id"] = p.pop("id")
             
@@ -179,7 +189,11 @@ async def list_tts(
         
         formatted_projects.append(p)
         
-    return formatted_projects
+    return {
+        "items": formatted_projects,
+        "next_cursor": result.get("next_cursor"),
+        "has_more": result.get("has_more")
+    }
 
 @router.get("/{tts_id}")
 async def get_tts(

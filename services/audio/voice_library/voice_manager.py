@@ -71,14 +71,18 @@ class VoiceManager:
         self,
         user_id: str = None,
         include_public: bool = True,
-        limit: int = 50
-    ) -> List[Dict]:
-        """List voice samples for a user."""
+        limit: int = 50,
+        cursor: str = None
+    ) -> Dict:
+        """List voice samples for a user with pagination."""
         if not self.db.client:
-            return []
+            return {"items": [], "next_cursor": None, "has_more": False}
         
         try:
-            query = self.db.client.table("voice_samples").select("*").order("created_at", desc=True).limit(limit)
+            query = self.db.client.table("voice_samples").select("*").order("created_at", desc=True).limit(limit + 1)
+            
+            if cursor:
+                query = query.lt("created_at", cursor)
             
             if user_id and include_public:
                 # Get user's samples + public samples
@@ -91,10 +95,24 @@ class VoiceManager:
                 query = query.eq("is_public", True)
             
             response = query.execute()
-            return response.data
+            data = response.data
+            
+            has_more = False
+            next_cursor = None
+            
+            if len(data) > limit:
+                has_more = True
+                data = data[:limit]
+                next_cursor = data[-1]["created_at"]
+                
+            return {
+                "items": data,
+                "next_cursor": next_cursor,
+                "has_more": has_more
+            }
         except Exception as e:
             print(f"Error listing voice samples: {e}")
-            return []
+            return {"items": [], "next_cursor": None, "has_more": False}
     
     def delete_voice_sample(self, voice_sample_id: str, user_id: str = None) -> bool:
         """Delete a voice sample."""

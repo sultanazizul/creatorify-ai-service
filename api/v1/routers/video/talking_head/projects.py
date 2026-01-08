@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from typing import List
-from models.video.talking_head import ProjectCreate, ProjectResponse, ProjectStatus
+from models.video.talking_head import ProjectCreate, ProjectResponse, ProjectStatus, PaginatedProjectResponse
 from services.infrastructure.supabase import SupabaseService
 from core.security import get_api_key
 import modal
@@ -87,16 +87,18 @@ async def create_project(
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/", response_model=List[ProjectResponse])
+@router.get("/", response_model=PaginatedProjectResponse)
 async def list_projects(
     user_id: str = None, 
     limit: int = 20,
     type: str = None, # Added type filter
+    cursor: str = None,
     db: SupabaseService = Depends(get_db)
 ):
-    projects = db.list_projects(user_id, limit, project_type=type)
+    result = db.list_projects(user_id, limit, project_type=type, cursor=cursor)
     
     # Format responses to lift pipeline
+    projects = result.get("items", [])
     formatted_projects = []
     for p in projects:
         # Lift pipeline from metadata
@@ -109,7 +111,11 @@ async def list_projects(
         
         formatted_projects.append(p)
         
-    return formatted_projects
+    return {
+        "items": formatted_projects,
+        "next_cursor": result.get("next_cursor"),
+        "has_more": result.get("has_more")
+    }
 
 @router.get("/{id}", response_model=ProjectResponse)
 async def get_project(

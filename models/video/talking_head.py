@@ -47,6 +47,11 @@ class ProjectResponse(BaseModel):
     current_stage: Optional[str] = None
     pipeline: Optional[Dict[str, Any]] = None
 
+class PaginatedProjectResponse(BaseModel):
+    items: List[ProjectResponse]
+    next_cursor: Optional[str]
+    has_more: bool
+
 class ProjectStatus(BaseModel):
     id: str
     status: str

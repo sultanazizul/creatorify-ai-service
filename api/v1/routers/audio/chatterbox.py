@@ -4,7 +4,8 @@ Endpoints for voice cloning TTS and multilingual TTS.
 """
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel
+from typing import Optional, List, Any, Dict
 from services.infrastructure.supabase import SupabaseService
 from services.audio.tts.chatterbox.multilingual_service import SUPPORTED_LANGUAGES
 
@@ -19,6 +20,11 @@ def get_db():
 
 # Request models
 from models.audio.tts import ChatterboxTTSRequest as TTSRequest, MultilingualTTSRequest
+
+class PaginatedProjectList(BaseModel):
+    items: List[Dict[str, Any]]
+    next_cursor: Optional[str]
+    has_more: bool
 
 
 @router.post("/tts/generate")
@@ -207,21 +213,30 @@ async def get_project_status(
     return _format_project_response(project)
 
 
-@router.get("/projects")
+@router.get("/projects", response_model=PaginatedProjectList)
 async def list_projects(
     user_id: str = None,
     project_type: str = None,
     limit: int = 50,
+    cursor: str = None,
     db: SupabaseService = Depends(get_db)
 ):
     """List Chatterbox projects."""
-    projects = db.list_chatterbox_projects(
+    result = db.list_chatterbox_projects(
         user_id=user_id,
         project_type=project_type,
-        limit=limit
+        limit=limit,
+        cursor=cursor
     )
     
-    return [_format_project_response(p) for p in projects]
+    items = result.get("items", [])
+    formatted_items = [_format_project_response(p) for p in items]
+    
+    return {
+        "items": formatted_items,
+        "next_cursor": result.get("next_cursor"),
+        "has_more": result.get("has_more")
+    }
 
 
 @router.delete("/projects/{project_id}")
