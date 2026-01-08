@@ -41,13 +41,17 @@ class ProjectResponse(BaseModel):
     progress: int
     video_url: Optional[str]
     error_message: Optional[str]
-    created_at: Optional[str]
-    updated_at: Optional[str]
-    parameters: Optional[Dict[str, Any]]
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    current_stage: Optional[str] = None
+    pipeline: Optional[Dict[str, Any]] = None
 
 class ProjectStatus(BaseModel):
     id: str
     status: str
     progress: int
-    video_url: Optional[str]
-    error_message: Optional[str]
+    video_url: Optional[str] = None
+    error_message: Optional[str] = None
+    current_stage: Optional[str] = None
+    pipeline: Optional[Dict[str, Any]] = None

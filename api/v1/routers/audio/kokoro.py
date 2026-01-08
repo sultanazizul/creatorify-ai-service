@@ -153,11 +153,33 @@ async def list_tts(
 ):
     """List TTS projects."""
     projects = db.list_tts(user_id, limit)
-    # Rename id to tts_id
+    # Rename id to tts_id and format pipeline
+    formatted_projects = []
     for p in projects:
         if "id" in p:
             p["tts_id"] = p.pop("id")
-    return projects
+            
+        # Lift pipeline logic
+        if "metadata" in p and p["metadata"]:
+            meta = p["metadata"]
+            if "pipeline" in meta:
+                p["pipeline"] = meta.pop("pipeline")
+            if not meta:
+                del p["metadata"]
+        
+        # Ensure current_stage
+        if "current_stage" not in p or not p["current_stage"]:
+             if "pipeline" in p and "stages" in p["pipeline"]:
+                # Simple infer: check generic status or assume Text Analysis
+                p["current_stage"] = "TEXT_ANALYSIS" # Simplified for list view
+                for s in p["pipeline"]["stages"]:
+                     if s["status"] == "active":
+                         p["current_stage"] = s["key"]
+                         break
+        
+        formatted_projects.append(p)
+        
+    return formatted_projects
 
 @router.get("/{tts_id}")
 async def get_tts(
@@ -171,6 +193,32 @@ async def get_tts(
     
     if "id" in project:
         project["tts_id"] = project.pop("id")
+
+    # Lift pipeline from metadata and clean up
+    if "metadata" in project and project["metadata"]:
+        meta = project["metadata"]
+        if "pipeline" in meta:
+            project["pipeline"] = meta.pop("pipeline")
+        
+        # Remove metadata if empty
+        if not meta:
+            del project["metadata"]
+    
+    # Ensure current_stage is present if missing
+    if "current_stage" not in project or not project["current_stage"]:
+         if "pipeline" in project and "stages" in project["pipeline"]:
+             for s in project["pipeline"]["stages"]:
+                 if s["status"] == "active":
+                     project["current_stage"] = s["key"]
+                     break
+             else:
+                 # If no active stage, check for last completed
+                 for s in reversed(project["pipeline"]["stages"]):
+                     if s["status"] == "completed":
+                         project["current_stage"] = s["key"]
+                         break
+                 else:
+                    project["current_stage"] = "TEXT_ANALYSIS"
         
     return project
 

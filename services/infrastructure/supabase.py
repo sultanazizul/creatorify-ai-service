@@ -35,6 +35,17 @@ class SupabaseService:
             "status": "queued",
             "progress": 0,
             "parameters": project_data.parameters.dict() if project_data.parameters else {},
+            "current_stage": "SETUP",
+            "metadata": {
+                "pipeline": {
+                   "stages": [
+                        {"key": "SETUP", "label": "Menyiapkan model...", "status": "pending"},
+                        {"key": "INFERENCE", "label": "Membuat video...", "status": "pending"},
+                        {"key": "POST_PROCESS", "label": "Finalisasi video", "status": "pending"},
+                        {"key": "UPLOADING", "label": "Menyimpan hasil", "status": "pending"}
+                    ]
+                }
+            }
         }
         
         # Only add audio_url_2 if it exists to avoid schema errors if column is missing
@@ -192,7 +203,19 @@ class SupabaseService:
             "lang_code": tts_data.get("lang_code"),
             "audio_url": audio_url,
             "status": "pending",
-            "progress": 0
+            "progress": 0,
+            "current_stage": "TEXT_ANALYSIS",
+            "metadata": {
+                "pipeline": {
+                   "stages": [
+                        {"key": "TEXT_ANALYSIS", "label": "Menyiapkan teks...", "status": "pending"},
+                        {"key": "VOICE_LOADING", "label": "Memuat karakter suara", "status": "pending"},
+                        {"key": "INFERENCE", "label": "Menghasilkan suara...", "status": "pending"},
+                        {"key": "AUDIO_POST_PROCESS", "label": "Finalisasi audio", "status": "pending"},
+                        {"key": "UPLOADING", "label": "Menyimpan hasil", "status": "pending"}
+                    ]
+                }
+            }
         }
         
         try:
@@ -281,7 +304,26 @@ class SupabaseService:
             "min_p": project_data.get("min_p", 0.05),
             "top_p": project_data.get("top_p", 1.0),
             "status": "pending",
-            "progress": 0
+            "progress": 0,
+            "current_stage": "TEXT_ANALYSIS" if project_data.get("project_type") != "voice_conversion" else "AUDIO_PREP",
+            "metadata": {
+                "pipeline": {
+                    "stages": [
+                        {"key": "TEXT_ANALYSIS", "label": "Menyiapkan teks...", "status": "pending"},
+                        {"key": "VOICE_LOADING", "label": "Memuat karakter suara", "status": "pending"},
+                        {"key": "INFERENCE", "label": "Menghasilkan suara...", "status": "pending"},
+                        {"key": "AUDIO_POST_PROCESS", "label": "Finalisasi audio", "status": "pending"},
+                        {"key": "UPLOADING", "label": "Menyimpan hasil", "status": "pending"}
+                    ] if project_data.get("project_type") != "voice_conversion" else [
+                        {"key": "AUDIO_PREP", "label": "Menyiapkan audio...", "status": "pending"},
+                        {"key": "SOURCE_ANALYSIS", "label": "Menganalisis suara asli...", "status": "pending"},
+                        {"key": "VOICE_LOADING", "label": "Memuat karakter suara", "status": "pending"},
+                        {"key": "INFERENCE", "label": "Mengubah suara...", "status": "pending"},
+                        {"key": "AUDIO_POST_PROCESS", "label": "Finalisasi audio", "status": "pending"},
+                        {"key": "UPLOADING", "label": "Menyimpan hasil", "status": "pending"}
+                    ]
+                }
+            }
         }
         
         try:

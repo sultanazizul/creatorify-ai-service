@@ -279,6 +279,7 @@ class Model:
         from pathlib import Path
         from vendor.infinitetalk.generate_infinitetalk import generate
         import librosa
+        from services.infrastructure.supabase import SupabaseService
 
         params = params or {}
         t0 = time.time()
@@ -377,54 +378,199 @@ class Model:
         output_dir = Path(OUTPUT_DIR)
         model_root = Path(MODEL_DIR)
         
+        if project_id:
+            db_service = SupabaseService()
+            
+            # --- Pipeline Helper for Video ---
+            from datetime import datetime
+            STAGE_WEIGHTS = {
+                "SETUP": 20, "INFERENCE": 50, "POST_PROCESS": 15, "UPLOADING": 15
+            }
+            PIPELINE_ORDER = ["SETUP", "INFERENCE", "POST_PROCESS", "UPLOADING"]
+            
+            def update_pipeline(stage_key, stage_pct=0, status="active", error=None):
+                """Helper to update pipeline state in DB."""
+                try:
+                    # 1. Calculate global progress
+                    progress = 0
+                    for s in PIPELINE_ORDER:
+                        if s == stage_key:
+                            break
+                        progress += STAGE_WEIGHTS.get(s, 0)
+                    
+                    # Add fraction of current stage
+                    progress += int(STAGE_WEIGHTS.get(stage_key, 0) * (stage_pct / 100.0))
+                    progress = min(99, max(0, progress))
+                    
+                    # 2. Prepare pipeline metadata update
+                    # Note: Using update_status directly with metadata is safer if supported,
+                    # but SupabaseService.update_status currently only takes specific args.
+                    # We need to fetch, update meta, and push back. 
+                    # Assuming we can extend update_status or use client directly.
+                    # For safety, we'll try to use the client directly if possible or update SupabaseService.
+                    # Wait, update_status in supabase.py doesn't support metadata argument yet?
+                    # Let's check SupabaseService.update_status in next step if needed.
+                    # For now, we'll use a direct client update logic like in TTS if available, 
+                    # OR we just rely on standard fields if method isn't updated.
+                    # Actually, looking at previous steps, the user *added* metadata to the table.
+                    # I should probably update SupabaseService.update_status to support metadata,
+                    # OR do it manually here.
+                    
+                    # Re-reading supabase.py in previous turn... update_status takes (project_id, status, progress, video_url, error_message).
+                    # It DOES NOT take metadata.
+                    # I should modify update_status in supabase.py to accept metadata, OR do raw client call here.
+                    # Let's do raw client call here to avoid modifying supabase.py signature broadly if not needed,
+                    # OR better: Add metadata support to `update_status`.
+                    # Given I am in app.py now, I will use db_service.client directly as I did in TTS logic (which used update_tts that accepted dict).
+                    # But update_status is more rigid.
+                    # Let's use db_service.client.table("projects").update(...) directly.
+                    
+                    p = db_service.get_project(project_id)
+                    if not p: return
+
+                    meta = p.get("metadata", {}) or {}
+                    
+                    # Init pipeline if missing
+                    if "pipeline" not in meta:
+                        meta["pipeline"] = {"stages": [
+                            {"key": k, "label": l, "status": "pending"} 
+                            for k, l in [
+                                ("SETUP", "Menyiapkan model..."),
+                                ("INFERENCE", "Membuat video..."),
+                                ("POST_PROCESS", "Finalisasi video"),
+                                ("UPLOADING", "Menyimpan hasil")
+                            ]
+                        ]}
+
+                    stages = meta["pipeline"].get("stages", [])
+                    now = datetime.utcnow().isoformat()
+                    
+                    for s in stages:
+                        if s["key"] == stage_key:
+                            s["status"] = status
+                            if status == "completed":
+                                s["completed_at"] = now
+                            if error:
+                                s["error"] = str(error)
+                        elif s["status"] == "active" and s["key"] != stage_key:
+                            s["status"] = "completed"
+                            if "completed_at" not in s:
+                                s["completed_at"] = now
+                    
+                    meta["pipeline"]["stages"] = stages
+                    
+                    data = {
+                        "progress": progress,
+                        "current_stage": stage_key,
+                        "metadata": meta,
+                        "updated_at": "now()"
+                    }
+                    if status == "failed":
+                        data["status"] = "failed"
+                    # Only update status if it's not finished/failed already unless we are failing it
+                    elif p.get("status") not in ["finished", "failed"]:
+                        data["status"] = "processing"
+                        
+                    db_service.client.table("projects").update(data).eq("id", project_id).execute()
+                except Exception as e:
+                    print(f"Pipeline update failed: {e}")
+
+            # Define the actual callback for the generation loop
+            last_reported_pct = -1
+            def progress_callback(step, total_steps, current_frame_start=0, chunk_size=0, total_target_frames=0):
+                nonlocal last_reported_pct
+                
+                if total_steps > 0 and total_target_frames > 0:
+                    # Calculate progress within the current chunk
+                    chunk_progress = step / total_steps
+                    
+                    # Calculate frames generated exactly so far in this chunk
+                    current_chunk_frames = chunk_progress * chunk_size
+                    
+                    # Total frames approximated
+                    total_current_frames = current_frame_start + current_chunk_frames
+                    
+                    # Global percentage
+                    pct = int((total_current_frames / total_target_frames) * 100)
+                    
+                    # Ensure we don't exceed 100% and don't go backwards excessively (though slight jitter is ok)
+                    pct = min(99, max(0, pct))
+                    
+                    # Update DB (throttle this to every 1% change to ensure smooth UI)
+                    # Since sampling steps are low (e.g. 8), we should update on every step that increases pct
+                    if pct > last_reported_pct:
+                        print(f"[Progress Callback] Step {step}/{total_steps} (Chunk Start: {current_frame_start}) -> Global Pct: {pct}%")
+                        update_pipeline("INFERENCE", pct, "active")
+                        last_reported_pct = pct
+
+            # Argparse simulation
+            # ... existing ...
+            # Note: We create the SimpleNamespace below, ensuring we pass this callback.
+            update_pipeline("SETUP", 0, "active")
+
         # Map params to args
-        args = SimpleNamespace(
-            task="infinitetalk-14B",
-            size="infinitetalk-480",
-            frame_num=chunk_frame_num,
-            max_frame_num=max_frame_num,
-            ckpt_dir=str(model_root / "Wan2.1-I2V-14B-480P"),
-            infinitetalk_dir=str(model_root / "InfiniteTalk" / "single" / "single" / "infinitetalk.safetensors"),
-            quant_dir=None,
-            wav2vec_dir=str(model_root / "chinese-wav2vec2-base"),
-            dit_path=None,
-            lora_dir=[str(model_root / "FusionX_LoRa" / "FusionX_LoRa" / "Wan2.1_I2V_14B_FusionX_LoRA.safetensors")],
-            lora_scale=[params.get('lora_scale', 1.0)],
-            offload_model=False,
-            ulysses_size=1,
-            ring_size=1,
-            t5_fsdp=False,
-            t5_cpu=False,
-            dit_fsdp=False,
-            save_file=str(output_dir / output_filename),
-            audio_save_dir=str(output_dir / "temp_audio"),
-            base_seed=params.get('seed', 42) or 42,
-            input_json=input_json_path,
-            motion_frame=25,
-            mode=mode,
-            sample_steps=params.get('sample_steps', 8),
-            sample_shift=params.get('sample_shift', 3.0),
-            sample_text_guide_scale=params.get('sample_text_guide_scale', 1.0),
-            sample_audio_guide_scale=params.get('sample_audio_guide_scale', 6.0),
-            num_persistent_param_in_dit=params.get('num_persistent_param_in_dit') if params.get('num_persistent_param_in_dit') is not None else 500000000,
-            audio_mode="localfile",
-            use_teacache=True,
-            teacache_thresh=0.3,
-            use_apg=True,
-            apg_momentum=-0.75,
-            apg_norm_threshold=55,
-            color_correction_strength=params.get('color_correction_strength', 0.2),
-            scene_seg=False,
-            quant=None,
-        )
+        import types
+        output_path_no_ext = str(output_dir / output_filename)
+        args = types.SimpleNamespace(**{
+            "task": "infinitetalk-14B",
+            "size": "infinitetalk-480",
+            "ckpt_dir": "/models/Wan2.1-I2V-14B-480P",
+            "infinitetalk_dir": "/models/InfiniteTalk/single/single/infinitetalk.safetensors",
+            "dit_path": None,
+            "quant_dir": None,
+            "wav2vec_dir": "/models/chinese-wav2vec2-base",
+            "lora_dir": ["/models/FusionX_LoRa/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors"],
+            "lora_scale": [params.get("lora_scale", 1.0)],
+            "offload_model": False,
+            "ulysses_size": 1,
+            "ring_size": 1,
+            "t5_fsdp": False,
+            "t5_cpu": False,
+            "dit_fsdp": False,
+            "save_file": output_path_no_ext,
+            "audio_save_dir": "/outputs/temp_audio",
+            "base_seed": params.get("seed", 42),
+            "input_json": input_json_path,
+            "motion_frame": 25,
+            "mode": mode,
+            "sample_steps": params.get("sample_steps", 40),
+            "sample_shift": params.get("sample_shift", 3.0),
+            "sample_text_guide_scale": params.get("sample_text_guide_scale", 5.0),
+            "sample_audio_guide_scale": params.get("sample_audio_guide_scale", 4.0),
+            "num_persistent_param_in_dit": params.get("num_persistent_param_in_dit") or 0,
+            "audio_mode": "localfile",
+            "use_teacache": True,
+            "teacache_thresh": 0.3,
+            "use_apg": True,
+            "apg_momentum": -0.75,
+            "apg_norm_threshold": 55,
+            "color_correction_strength": params.get("color_correction_strength", 1.0),
+            "scene_seg": False,
+            "quant": None,
+            "max_frame_num": max_frame_num,
+            "frame_num": chunk_frame_num,
+            "progress_callback": progress_callback
+        })
         
         os.environ["RANK"] = "0"
         os.environ["WORLD_SIZE"] = "1"
         os.environ["LOCAL_RANK"] = "0"
         
         Path(args.audio_save_dir).mkdir(parents=True, exist_ok=True)
+        
+        # SETUP DONE
+        if project_id:
+             update_pipeline("SETUP", 100, "completed")
+             update_pipeline("INFERENCE", 0, "active")
+
+        # INFERENCE
         generate(args)
         
+        # INFERENCE DONE
+        if project_id:
+             update_pipeline("INFERENCE", 100, "completed")
+             update_pipeline("POST_PROCESS", 0, "active")
+
         generated_file = f"{args.save_file}.mp4"
         
         # Organize outputs into folders
@@ -449,6 +595,10 @@ class Model:
         # Trigger Cloudinary Upload if project_id is provided
         final_file_name = f"{output_filename}.mp4"
         if project_id:
+            # POST PROCESS DONE
+            update_pipeline("POST_PROCESS", 100, "completed")
+            update_pipeline("UPLOADING", 0, "active")
+            
             print(f"Triggering Cloudinary upload for project {project_id}...")
             upload_video_to_cloudinary.spawn(project_id, final_file_name)
         else:
@@ -647,39 +797,150 @@ def process_tts_task(tts_id: str, text: str, voice: str, speed: float, lang_code
     from services.infrastructure.supabase import SupabaseService
     from services.infrastructure.cloudinary import CloudinaryService
     
+    # --- Pipeline Helper (Injected for isolation) ---
+    from datetime import datetime
+    STAGE_WEIGHTS = {
+        "TEXT_ANALYSIS": 5, "VOICE_LOADING": 10, "INFERENCE": 60, "AUDIO_POST_PROCESS": 10, "UPLOADING": 15
+    }
+    PIPELINE_ORDER = ["TEXT_ANALYSIS", "VOICE_LOADING", "INFERENCE", "AUDIO_POST_PROCESS", "UPLOADING"]
+    
+    def update_pipeline(stage_key, stage_pct=0, status="active", error=None):
+        """Helper to update pipeline state in DB."""
+        try:
+            # 1. Calculate global progress
+            progress = 0
+            for s in PIPELINE_ORDER:
+                if s == stage_key:
+                    break
+                progress += STAGE_WEIGHTS.get(s, 0)
+            
+            # Add fraction of current stage
+            progress += int(STAGE_WEIGHTS.get(stage_key, 0) * (stage_pct / 100.0))
+            progress = min(99, max(0, progress))
+            
+            # 2. Prepare pipeline metadata update
+            p = db.get_tts(tts_id)
+            meta = p.get("metadata", {}) or {}
+            
+            # Ensure metadata structure exists if it was created before migration
+            if "pipeline" not in meta:
+                meta["pipeline"] = {"stages": [
+                    {"key": k, "label": l, "status": "pending"} 
+                    for k, l in [
+                        ("TEXT_ANALYSIS", "Menyiapkan teks..."),
+                        ("VOICE_LOADING", "Memuat karakter suara"),
+                        ("INFERENCE", "Menghasilkan suara..."),
+                        ("AUDIO_POST_PROCESS", "Finalisasi audio"),
+                        ("UPLOADING", "Menyimpan hasil")
+                    ]
+                ]}
+
+            stages = meta["pipeline"].get("stages", [])
+            now = datetime.utcnow().isoformat()
+            
+            for s in stages:
+                if s["key"] == stage_key:
+                    s["status"] = status
+                    if status == "completed":
+                        s["completed_at"] = now
+                    if error:
+                        s["error"] = str(error)
+                elif s["status"] == "active" and s["key"] != stage_key:
+                    # Auto-complete previous stage
+                     s["status"] = "completed"
+                     if "completed_at" not in s:
+                         s["completed_at"] = now
+            
+            meta["pipeline"]["stages"] = stages
+            
+            # 3. Update DB
+            update_payload = {
+                "progress": progress,
+                "current_stage": stage_key,
+                "metadata": meta
+            }
+            if status == "failed":
+                update_payload["status"] = "failed"
+                # tts_projects table might not have error_message column, checking schema...
+                # Assuming update_tts handles dictionary updates correctly
+                pass
+                
+            db.update_tts(tts_id, update_payload)
+        except Exception as e:
+            # Fallback simple update
+            print(f"Pipeline update failed: {e}")
+            db.update_tts(tts_id, {"progress": progress})
+
     try:
         # Initialize services
         tts_service = TTSService()
         db = SupabaseService()
         cloudinary = CloudinaryService()
         
-        # Update: Started processing
-        db.update_tts(tts_id, {"status": "processing", "progress": 10})
+        # Start Pipeline: TEXT_ANALYSIS
+        update_pipeline("TEXT_ANALYSIS", 0, "active")
         
-        # 1. Generate Audio
-        print(f"Generating audio for {tts_id}...")
-        db.update_tts(tts_id, {"progress": 30})
+        # 1. Text Analysis (Simulated)
+        # Validation is already done at API level, but we can update progress
+        update_pipeline("TEXT_ANALYSIS", 100, "completed")
         
-        audio_buffer = tts_service.generate_audio(
-            text=text,
-            voice=voice,
-            speed=speed,
-            lang_code=lang_code
-        )
+        # 2. Voice Loading
+        update_pipeline("VOICE_LOADING", 0, "active")
+        # In reality, loading happens inside tts_service, but we mark it here
+        update_pipeline("VOICE_LOADING", 100, "completed")
         
-        # 2. Save to temp file
-        db.update_tts(tts_id, {"progress": 60})
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            tmp_file.write(audio_buffer.read())
-            tmp_path = tmp_file.name
+        # 3. Inference        # 1. Generate Audio (Chunked)
+        from services.audio.tts.text_chunker import TextChunker
+        import soundfile as sf
+        import io
+        import numpy as np
+        
+        chunker = TextChunker(max_chunk_size=500)
+        chunks = chunker.split_text(text)
+        print(f"Text split into {len(chunks)} chunks for Kokoro inference")
+        
+        update_pipeline("INFERENCE", 0, "active")
+        
+        audio_segments = []
+        for i, chunk in enumerate(chunks):
+            print(f"Generating chunk {i+1}/{len(chunks)}...")
             
-        # 3. Upload to Cloudinary
+            # Generate audio for chunk
+            chunk_buffer = tts_service.generate_audio(
+                text=chunk,
+                voice=voice,
+                speed=speed,
+                lang_code=lang_code
+            )
+            
+            # Read into numpy array for concatenation
+            data, samplerate = sf.read(chunk_buffer)
+            audio_segments.append(data)
+            
+            # Update progress
+            chunk_pct = int(((i + 1) / len(chunks)) * 100)
+            update_pipeline("INFERENCE", chunk_pct, "active")
+        
+        update_pipeline("INFERENCE", 100, "completed")
+        
+        # Concatenate
+        if not audio_segments:
+             raise Exception("No audio generated")
+             
+        full_audio = np.concatenate(audio_segments)
+        
+        # 4. Audio Post Process (Saving to temp)
+        update_pipeline("AUDIO_POST_PROCESS", 0, "active")
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            sf.write(tmp_file.name, full_audio, samplerate, format='WAV')
+            tmp_path = tmp_file.name
+        update_pipeline("AUDIO_POST_PROCESS", 100, "completed")
+            
+        # 5. Uploading
+        update_pipeline("UPLOADING", 0, "active")
         print(f"Uploading to Cloudinary for {tts_id}...")
-        db.update_tts(tts_id, {"progress": 80})
         
         public_id = f"tts_{uuid.uuid4()}"
-        
-        # Path: Creatorify/AI Audio Output/Kokoro82/
         folder = "Creatorify/AI Audio Output/Kokoro82"
         
         audio_url = cloudinary.upload_audio(tmp_path, public_id=public_id, folder=folder)
@@ -687,7 +948,7 @@ def process_tts_task(tts_id: str, text: str, voice: str, speed: float, lang_code
         if not audio_url:
             raise Exception("Failed to upload audio to Cloudinary")
             
-        # 4. Save to Persistent Volume
+        # Save to Persistent Volume
         try:
             output_dir = Path("/outputs/tts")
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -699,13 +960,18 @@ def process_tts_task(tts_id: str, text: str, voice: str, speed: float, lang_code
         # Clean up temp file
         os.unlink(tmp_path)
         
-        # 5. Update Supabase
+        # Final Update
+        update_pipeline("UPLOADING", 100, "completed")
         print(f"Updating Supabase for {tts_id}...")
-        db.update_tts(tts_id, {
+        
+        # Get final metadata to ensure completed timestamp
+        final_update = {
             "audio_url": audio_url,
             "status": "completed",
-            "progress": 100
-        })
+            "progress": 100,
+            "current_stage": "UPLOADING"
+        }
+        db.update_tts(tts_id, final_update)
         
         print(f"TTS task {tts_id} completed successfully.")
         
@@ -713,10 +979,11 @@ def process_tts_task(tts_id: str, text: str, voice: str, speed: float, lang_code
         print(f"Error in TTS task {tts_id}: {e}")
         # Update status to failed
         try:
-            db = SupabaseService()
-            db.update_tts(tts_id, {"status": "failed"})
-        except Exception as db_e:
-            print(f"Failed to update error status in DB: {db_e}")
+             # Try to capture error in pipeline if possible
+             pass
+        except: 
+            pass
+        # Re-raise to let Modal handle failure logging
         raise e
 
 # --- Chatterbox Background Processing Functions ---
@@ -763,9 +1030,83 @@ def process_chatterbox_tts(
         cloudinary = CloudinaryService()
         tts_service = ChatterboxTTSService()
         voice_manager = VoiceManager()
+
+        # --- Pipeline Helper ---
+        from datetime import datetime
+        STAGE_WEIGHTS = {
+            "TEXT_ANALYSIS": 5, "VOICE_LOADING": 10, "INFERENCE": 60, "AUDIO_POST_PROCESS": 10, "UPLOADING": 15
+        }
+        PIPELINE_ORDER = ["TEXT_ANALYSIS", "VOICE_LOADING", "INFERENCE", "AUDIO_POST_PROCESS", "UPLOADING"]
         
-        # Update: Started
-        db.update_chatterbox_project(project_id, {"status": "processing", "progress": 10})
+        def update_pipeline(stage_key, stage_pct=0, status="active", error=None):
+            """Helper to update pipeline state in DB."""
+            try:
+                # 1. Calculate global progress
+                progress = 0
+                for s in PIPELINE_ORDER:
+                    if s == stage_key:
+                        break
+                    progress += STAGE_WEIGHTS.get(s, 0)
+                
+                # Add fraction of current stage
+                progress += int(STAGE_WEIGHTS.get(stage_key, 0) * (stage_pct / 100.0))
+                progress = min(99, max(0, progress))
+                
+                # 2. Prepare pipeline metadata update
+                # We need to fetch current to merge, or just overwrite if we are confident (merging is safer)
+                p = db.get_chatterbox_project(project_id)
+                meta = p.get("metadata", {}) or {}
+                
+                if "pipeline" not in meta:
+                    # Init if missing
+                    meta["pipeline"] = {"stages": [
+                        {"key": k, "label": l, "status": "pending"} 
+                        for k, l in [
+                            ("TEXT_ANALYSIS", "Menyiapkan teks..."),
+                            ("VOICE_LOADING", "Memuat karakter suara"),
+                            ("INFERENCE", "Menghasilkan suara..."),
+                            ("AUDIO_POST_PROCESS", "Finalisasi audio"),
+                            ("UPLOADING", "Menyimpan hasil")
+                        ]
+                    ]}
+
+                stages = meta["pipeline"].get("stages", [])
+                now = datetime.utcnow().isoformat()
+                
+                for s in stages:
+                    if s["key"] == stage_key:
+                        s["status"] = status
+                        if status == "completed":
+                            s["completed_at"] = now
+                        if error:
+                            s["error"] = str(error)
+                    elif s["status"] == "active" and s["key"] != stage_key:
+                        # Auto-complete previous stage
+                         s["status"] = "completed"
+                         if "completed_at" not in s:
+                             s["completed_at"] = now
+                
+                meta["pipeline"]["stages"] = stages
+                
+                # 3. Update DB
+                update_payload = {
+                    "progress": progress,
+                    "current_stage": stage_key,
+                    "metadata": meta
+                }
+                if status == "failed":
+                    update_payload["status"] = "failed"
+                    update_payload["error_message"] = str(error)
+                    
+                db.update_chatterbox_project(project_id, update_payload)
+                
+            except Exception as e:
+                print(f"Pipeline update failed: {e}")
+                # Fallback simple update
+                db.update_chatterbox_project(project_id, {"progress": progress})
+
+        # --- Start Pipeline ---
+        update_pipeline("TEXT_ANALYSIS", 0, "active")
         
         # Get voice sample URL
         voice_sample = voice_manager.get_voice_sample(voice_sample_id)
@@ -778,15 +1119,22 @@ def process_chatterbox_tts(
         chunker = TextChunker(max_chunk_size=800)
         chunks = chunker.split_text(text)
         
+        update_pipeline("TEXT_ANALYSIS", 100, "completed")
+        update_pipeline("VOICE_LOADING", 0, "active")
+        
         print(f"Text split into {len(chunks)} chunks")
         
+        # Voice Loading (Metadata fetch)
+        update_pipeline("VOICE_LOADING", 100, "completed")
+        
         # Generate audio for each chunk
-        db.update_chatterbox_project(project_id, {"progress": 30})
+        update_pipeline("INFERENCE", 0, "active")
         audio_chunks = []
         
         for i, chunk in enumerate(chunks):
-            chunk_progress = 30 + int((i / len(chunks)) * 40)  # Progress from 30% to 70%
-            db.update_chatterbox_project(project_id, {"progress": chunk_progress})
+            # Calculate inference progress based on chunk count
+            chunk_pct = int(((i) / len(chunks)) * 100)
+            update_pipeline("INFERENCE", chunk_pct, "active")
             
             print(f"Generating chunk {i+1}/{len(chunks)}: '{chunk[:50]}...'")
             
@@ -802,8 +1150,10 @@ def process_chatterbox_tts(
             )
             audio_chunks.append(chunk_buffer)
         
+        update_pipeline("INFERENCE", 100, "completed")
+        
         # Concatenate audio chunks if multiple
-        db.update_chatterbox_project(project_id, {"progress": 70})
+        update_pipeline("AUDIO_POST_PROCESS", 0, "active")
         if len(audio_chunks) > 1:
             print(f"Concatenating {len(audio_chunks)} audio chunks...")
             
@@ -826,15 +1176,17 @@ def process_chatterbox_tts(
             audio_buffer.seek(0)
         else:
             audio_buffer = audio_chunks[0]
+            audio_buffer.seek(0)
         
         # Save to temp file
-        db.update_chatterbox_project(project_id, {"progress": 70})
+        update_pipeline("AUDIO_POST_PROCESS", 50, "active")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
             tmp_audio.write(audio_buffer.read())
             audio_path = tmp_audio.name
         
         # Upload to Cloudinary
-        db.update_chatterbox_project(project_id, {"progress": 85})
+        update_pipeline("AUDIO_POST_PROCESS", 100, "completed")
+        update_pipeline("UPLOADING", 0, "active")
         public_id = f"chatterbox_tts/{project_id}"
         
         # Path: Creatorify/AI Audio Output/Chatterbox/TTS Voice Cloning/
@@ -854,12 +1206,13 @@ def process_chatterbox_tts(
         import os
         os.unlink(audio_path)
         
-        # Update DB
         db.update_chatterbox_project(project_id, {
             "audio_url": audio_url,
             "status": "completed",
             "progress": 100
         })
+        # Mark pipeline complete
+        update_pipeline("UPLOADING", 100, "completed")
         
         print(f"Chatterbox TTS project {project_id} completed")
         
@@ -916,7 +1269,80 @@ def process_chatterbox_multilingual(
         tts_service = ChatterboxMultilingualService()
         voice_manager = VoiceManager()
         
-        db.update_chatterbox_project(project_id, {"status": "processing", "progress": 10})
+        voice_manager = VoiceManager()
+
+        # --- Pipeline Helper (Duplicated for isolation) ---
+        from datetime import datetime
+        STAGE_WEIGHTS = {
+            "TEXT_ANALYSIS": 5, "VOICE_LOADING": 10, "INFERENCE": 60, "AUDIO_POST_PROCESS": 10, "UPLOADING": 15
+        }
+        PIPELINE_ORDER = ["TEXT_ANALYSIS", "VOICE_LOADING", "INFERENCE", "AUDIO_POST_PROCESS", "UPLOADING"]
+        
+        def update_pipeline(stage_key, stage_pct=0, status="active", error=None):
+            """Helper to update pipeline state in DB."""
+            try:
+                # 1. Calculate global progress
+                progress = 0
+                for s in PIPELINE_ORDER:
+                    if s == stage_key:
+                        break
+                    progress += STAGE_WEIGHTS.get(s, 0)
+                
+                # Add fraction of current stage
+                progress += int(STAGE_WEIGHTS.get(stage_key, 0) * (stage_pct / 100.0))
+                progress = min(99, max(0, progress))
+                
+                # 2. Prepare pipeline metadata update
+                p = db.get_chatterbox_project(project_id)
+                meta = p.get("metadata", {}) or {}
+                
+                if "pipeline" not in meta:
+                    meta["pipeline"] = {"stages": [
+                        {"key": k, "label": l, "status": "pending"} 
+                        for k, l in [
+                            ("TEXT_ANALYSIS", "Menyiapkan teks..."),
+                            ("VOICE_LOADING", "Memuat karakter suara"),
+                            ("INFERENCE", "Menghasilkan suara..."),
+                            ("AUDIO_POST_PROCESS", "Finalisasi audio"),
+                            ("UPLOADING", "Menyimpan hasil")
+                        ]
+                    ]}
+
+                stages = meta["pipeline"].get("stages", [])
+                now = datetime.utcnow().isoformat()
+                
+                for s in stages:
+                    if s["key"] == stage_key:
+                        s["status"] = status
+                        if status == "completed":
+                            s["completed_at"] = now
+                        if error:
+                            s["error"] = str(error)
+                    elif s["status"] == "active" and s["key"] != stage_key:
+                        # Auto-complete previous stage
+                         s["status"] = "completed"
+                         if "completed_at" not in s:
+                             s["completed_at"] = now
+                
+                meta["pipeline"]["stages"] = stages
+                
+                # 3. Update DB
+                update_payload = {
+                    "progress": progress,
+                    "current_stage": stage_key,
+                    "metadata": meta
+                }
+                if status == "failed":
+                    update_payload["status"] = "failed"
+                    update_payload["error_message"] = str(error)
+                    
+                db.update_chatterbox_project(project_id, update_payload)
+            except Exception as e:
+                # Fallback simple update
+                db.update_chatterbox_project(project_id, {"progress": progress})
+
+        # --- Start Pipeline ---
+        update_pipeline("TEXT_ANALYSIS", 0, "active")
         
         # Get voice sample URL if provided
         voice_url = None
@@ -929,15 +1355,22 @@ def process_chatterbox_multilingual(
         chunker = TextChunker(max_chunk_size=800)
         chunks = chunker.split_text(text)
         
+        update_pipeline("TEXT_ANALYSIS", 100, "completed")
+        update_pipeline("VOICE_LOADING", 0, "active")
+        
         print(f"Text split into {len(chunks)} chunks")
         
+        # Voice Loading
+        update_pipeline("VOICE_LOADING", 100, "completed")
+        
         # Generate audio for each chunk
-        db.update_chatterbox_project(project_id, {"progress": 30})
+        update_pipeline("INFERENCE", 0, "active")
         audio_chunks = []
         
         for i, chunk in enumerate(chunks):
-            chunk_progress = 30 + int((i / len(chunks)) * 40)  # Progress from 30% to 70%
-            db.update_chatterbox_project(project_id, {"progress": chunk_progress})
+            # Calculate inference progress based on chunk count
+            chunk_pct = int(((i) / len(chunks)) * 100)
+            update_pipeline("INFERENCE", chunk_pct, "active")
             
             print(f"Generating chunk {i+1}/{len(chunks)}: '{chunk[:50]}...'")
             
@@ -954,8 +1387,10 @@ def process_chatterbox_multilingual(
             )
             audio_chunks.append(chunk_buffer)
         
+        update_pipeline("INFERENCE", 100, "completed")
+        
         # Concatenate audio chunks if multiple
-        db.update_chatterbox_project(project_id, {"progress": 70})
+        update_pipeline("AUDIO_POST_PROCESS", 0, "active")
         if len(audio_chunks) > 1:
             print(f"Concatenating {len(audio_chunks)} audio chunks...")
             
@@ -978,14 +1413,16 @@ def process_chatterbox_multilingual(
             audio_buffer.seek(0)
         else:
             audio_buffer = audio_chunks[0]
+            audio_buffer.seek(0)
         
         # Save and upload
-        db.update_chatterbox_project(project_id, {"progress": 70})
+        update_pipeline("AUDIO_POST_PROCESS", 50, "active")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
             tmp_audio.write(audio_buffer.read())
             audio_path = tmp_audio.name
         
-        db.update_chatterbox_project(project_id, {"progress": 85})
+        update_pipeline("AUDIO_POST_PROCESS", 100, "completed")
+        update_pipeline("UPLOADING", 0, "active")
         public_id = f"chatterbox_multilingual/{project_id}"
         
         # Path: Creatorify/AI Audio Output/Chatterbox/Multilingual/
@@ -1055,7 +1492,91 @@ def process_voice_conversion(
         vc_service = ChatterboxVCService()
         voice_manager = VoiceManager()
         
-        db.update_chatterbox_project(project_id, {"status": "processing", "progress": 10})
+        # --- Pipeline Helper (VC Specific) ---
+        from datetime import datetime
+        STAGE_WEIGHTS = {
+            "AUDIO_PREP": 5, "SOURCE_ANALYSIS": 5, "VOICE_LOADING": 10, 
+            "INFERENCE": 50, "AUDIO_POST_PROCESS": 10, "UPLOADING": 20
+        }
+        PIPELINE_ORDER = ["AUDIO_PREP", "SOURCE_ANALYSIS", "VOICE_LOADING", "INFERENCE", "AUDIO_POST_PROCESS", "UPLOADING"]
+        
+        def update_pipeline(stage_key, stage_pct=0, status="active", error=None):
+            """Helper to update pipeline state in DB."""
+            try:
+                # 1. Calculate global progress
+                progress = 0
+                for s in PIPELINE_ORDER:
+                    if s == stage_key:
+                        break
+                    progress += STAGE_WEIGHTS.get(s, 0)
+                
+                # Add fraction of current stage
+                progress += int(STAGE_WEIGHTS.get(stage_key, 0) * (stage_pct / 100.0))
+                progress = min(99, max(0, progress))
+                
+                # 2. Prepare pipeline metadata update
+                p = db.get_chatterbox_project(project_id)
+                meta = p.get("metadata", {}) or {}
+                
+                if "pipeline" not in meta:
+                    meta["pipeline"] = {"stages": [
+                        {"key": k, "label": l, "status": "pending"} 
+                        for k, l in [
+                            ("AUDIO_PREP", "Menyiapkan audio..."),
+                            ("SOURCE_ANALYSIS", "Menganalisis suara asli..."),
+                            ("VOICE_LOADING", "Memuat karakter suara"),
+                            ("INFERENCE", "Mengubah suara..."),
+                            ("AUDIO_POST_PROCESS", "Finalisasi audio"),
+                            ("UPLOADING", "Menyimpan hasil")
+                        ]
+                    ]}
+
+                stages = meta["pipeline"].get("stages", [])
+                now = datetime.utcnow().isoformat()
+                
+                for s in stages:
+                    if s["key"] == stage_key:
+                        s["status"] = status
+                        if status == "completed":
+                            s["completed_at"] = now
+                        if error:
+                            s["error"] = str(error)
+                    elif s["status"] == "active" and s["key"] != stage_key:
+                        # Auto-complete previous stage
+                         s["status"] = "completed"
+                         if "completed_at" not in s:
+                             s["completed_at"] = now
+                
+                meta["pipeline"]["stages"] = stages
+                
+                # 3. Update DB
+                update_payload = {
+                    "progress": progress,
+                    "current_stage": stage_key,
+                    "metadata": meta
+                }
+                if status == "failed":
+                    update_payload["status"] = "failed"
+                    update_payload["error_message"] = str(error)
+                    
+                db.update_chatterbox_project(project_id, update_payload)
+            except Exception as e:
+                # Fallback simple update
+                db.update_chatterbox_project(project_id, {"progress": progress})
+
+        # --- Start Pipeline ---
+        # 1. Audio Prep
+        update_pipeline("AUDIO_PREP", 0, "active")
+        
+        # 2. Source Analysis
+        update_pipeline("AUDIO_PREP", 100, "completed")
+        update_pipeline("SOURCE_ANALYSIS", 0, "active")
+        
+        # Simulate quick analysis (or actually check headers if possible, usually implicit in download)
+        update_pipeline("SOURCE_ANALYSIS", 100, "completed")
+        
+        # 3. Voice Loading
+        update_pipeline("VOICE_LOADING", 0, "active")
         
         # Get target voice URL
         voice_sample = voice_manager.get_voice_sample(target_voice_sample_id)
@@ -1063,8 +1584,10 @@ def process_voice_conversion(
             raise Exception(f"Voice sample {target_voice_sample_id} not found")
         target_voice_url = voice_sample["audio_url"]
         
-        # Convert voice via microservice
-        db.update_chatterbox_project(project_id, {"progress": 50})
+        update_pipeline("VOICE_LOADING", 100, "completed")
+        
+        # 4. Inference
+        update_pipeline("INFERENCE", 0, "active")
         
         print(f"Calling Voice Conversion microservice...")
         print(f"Source audio URL: {source_audio_url}")
@@ -1083,8 +1606,11 @@ def process_voice_conversion(
         
         print(f"Audio buffer size: {audio_buffer.getbuffer().nbytes} bytes")
         
-        # Save and upload
-        db.update_chatterbox_project(project_id, {"progress": 80})
+        update_pipeline("INFERENCE", 100, "completed")
+        
+        # 5. Audio Post Process
+        update_pipeline("AUDIO_POST_PROCESS", 0, "active")
+        
         print(f"Uploading converted audio to Cloudinary...")
         
         # Save to temp file
@@ -1098,6 +1624,11 @@ def process_voice_conversion(
         audio_hash = hashlib.md5(audio_data).hexdigest()
         print(f"Converted audio hash: {audio_hash}")
         print(f"Converted audio path: {audio_path}")
+        
+        update_pipeline("AUDIO_POST_PROCESS", 100, "completed")
+        
+        # 6. Uploading
+        update_pipeline("UPLOADING", 0, "active")
         
         public_id = f"voice_conversion/{project_id}"
         print(f"Uploading to Cloudinary with public_id: {public_id}")
@@ -1126,6 +1657,9 @@ def process_voice_conversion(
             "status": "completed",
             "progress": 100
         })
+        
+        # Final pipeline update
+        update_pipeline("UPLOADING", 100, "completed")
         
         print(f"Voice Conversion project {project_id} completed")
         

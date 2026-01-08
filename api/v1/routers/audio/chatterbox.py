@@ -162,6 +162,37 @@ async def get_supported_languages():
     return {"languages": SUPPORTED_LANGUAGES}
 
 
+# Helper to format response
+def _format_project_response(project):
+    if not project:
+        return None
+        
+    # Rename id
+    if "id" in project:
+        project["project_id"] = project.pop("id")
+        
+    # Lift pipeline from metadata
+    if "metadata" in project and project["metadata"]:
+        meta = project["metadata"]
+        if "pipeline" in meta:
+            project["pipeline"] = meta.pop("pipeline")
+        
+        # Remove metadata if empty
+        if not meta:
+            del project["metadata"]
+            
+    # Ensure current_stage is present if in metadata (db might not have column yet if migration not run)
+    if "current_stage" not in project or not project["current_stage"]:
+         # Try to get from metadata or infer from pipeline
+         if "pipeline" in project and "stages" in project["pipeline"]:
+             for s in project["pipeline"]["stages"]:
+                 if s["status"] == "active":
+                     project["current_stage"] = s["key"]
+                     break
+    
+    return project
+
+
 @router.get("/projects/{project_id}")
 async def get_project_status(
     project_id: str,
@@ -173,10 +204,7 @@ async def get_project_status(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    if "id" in project:
-        project["project_id"] = project.pop("id")
-    
-    return project
+    return _format_project_response(project)
 
 
 @router.get("/projects")
@@ -193,12 +221,7 @@ async def list_projects(
         limit=limit
     )
     
-    # Rename id
-    for p in projects:
-        if "id" in p:
-            p["project_id"] = p.pop("id")
-    
-    return projects
+    return [_format_project_response(p) for p in projects]
 
 
 @router.delete("/projects/{project_id}")

@@ -707,6 +707,9 @@ class InfiniteTalkPipeline:
 
                 progress_wrap = partial(tqdm, total=len(timesteps)-1) if progress else (lambda x: x)
                 for i in progress_wrap(range(len(timesteps)-1)):
+                    if hasattr(extra_args, 'progress_callback') and extra_args.progress_callback:
+                        # Pass: step, total_steps, current_frame_start, chunk_size, total_target_frames
+                        extra_args.progress_callback(i, len(timesteps)-1, audio_start_idx, frame_num, max_frames_num)
                     timestep = timesteps[i]
                     latent[:, :cur_motion_frames_latent_num] = latent_motion_frames
                     latent_model_input = [latent.to(self.device)]

@@ -114,10 +114,43 @@ async def get_project_status(
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
         # Don't fail the request, just return last known status
     
-    return ProjectStatus(
-        id=project['id'],
-        status=project['status'],
-        progress=project['progress'],
-        video_url=project.get('video_url'),
-        error_message=project.get('error_message')
-    )
+    # Lift pipeline from metadata and clean up
+    if "metadata" in project and project["metadata"]:
+        meta = project["metadata"]
+        if "pipeline" in meta:
+            project["pipeline"] = meta.pop("pipeline")
+        
+        # Remove metadata if empty
+        if not meta:
+             del project["metadata"]
+            
+    # Ensure current_stage is present if missing logic
+    current_stage = project.get("current_stage")
+    if not current_stage and "pipeline" in project:
+         stages = project["pipeline"].get("stages", [])
+         for s in stages:
+             if s["status"] == "active":
+                 current_stage = s["key"]
+                 break
+         else:
+             # If no active, maybe last completed or default
+             if project['status'] == 'completed' or project['status'] == 'finished':
+                 current_stage = "UPLOADING" # Fallback
+             elif project['status'] == 'queued':
+                 current_stage = "SETUP"
+             else:
+                 current_stage = "SETUP" # Default
+
+    response_data = {
+        "id": project['id'],
+        "status": project['status'],
+        "progress": project['progress'],
+        "video_url": project.get('video_url'),
+        "error_message": project.get('error_message'),
+        "current_stage": current_stage
+    }
+    
+    if "pipeline" in project:
+        response_data["pipeline"] = project["pipeline"]
+        
+    return ProjectStatus(**response_data)

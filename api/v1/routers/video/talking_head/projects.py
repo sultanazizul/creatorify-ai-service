@@ -70,10 +70,21 @@ async def create_project(
              
         # Add call_id to response
         db_project["call_id"] = call_id
-             
+        
+        # Lift pipeline from metadata
+        if "metadata" in db_project and db_project["metadata"]:
+            meta = db_project["metadata"]
+            if "pipeline" in meta:
+                db_project["pipeline"] = meta.pop("pipeline")
+            if not meta:
+                 del db_project["metadata"]
+              
         return db_project
 
     except Exception as e:
+        import traceback
+        print(f"[ERROR] Create Project failed: {e}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/", response_model=List[ProjectResponse])
@@ -83,7 +94,22 @@ async def list_projects(
     type: str = None, # Added type filter
     db: SupabaseService = Depends(get_db)
 ):
-    return db.list_projects(user_id, limit, project_type=type)
+    projects = db.list_projects(user_id, limit, project_type=type)
+    
+    # Format responses to lift pipeline
+    formatted_projects = []
+    for p in projects:
+        # Lift pipeline from metadata
+        if "metadata" in p and p["metadata"]:
+            meta = p["metadata"]
+            if "pipeline" in meta:
+                p["pipeline"] = meta.pop("pipeline")
+            if not meta:
+                del p["metadata"]
+        
+        formatted_projects.append(p)
+        
+    return formatted_projects
 
 @router.get("/{id}", response_model=ProjectResponse)
 async def get_project(
@@ -93,6 +119,15 @@ async def get_project(
     project = db.get_project(id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+        
+    # Lift pipeline from metadata
+    if "metadata" in project and project["metadata"]:
+        meta = project["metadata"]
+        if "pipeline" in meta:
+            project["pipeline"] = meta.pop("pipeline")
+        if not meta:
+             del project["metadata"]
+             
     return project
 
 @router.delete("/{id}")

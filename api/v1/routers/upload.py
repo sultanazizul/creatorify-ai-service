@@ -4,7 +4,7 @@ from core.security import get_api_key
 
 router = APIRouter(dependencies=[Depends(get_api_key)])
 
-@router.post("/")
+@router.post("")
 async def upload_file(
     file: UploadFile = File(...),
     resource_type: str = "auto"
