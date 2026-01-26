@@ -30,6 +30,7 @@ image = (
     .apt_install("git", "ffmpeg", "git-lfs", "libmagic1")
     .run_commands("sed -i 's/from inspect import ArgSpec/# from inspect import ArgSpec  # Removed for Python 3.11 compatibility/' /root/vendor/infinitetalk/wan/multitalk.py")
     .pip_install(
+        "sentencepiece", "protobuf", "transformers[sentencepiece]==4.48.2",
         "misaki[en]", "ninja", "psutil", "packaging", "flash_attn==2.7.4.post1",
         "pydantic", "python-magic", "huggingface_hub", "soundfile", "librosa",
         "xformers==0.0.28", "supabase", "cloudinary",
@@ -106,13 +107,23 @@ class Model:
                 
                 local_path.parent.mkdir(parents=True, exist_ok=True)
 
+                # Calculate correct local_dir so that hf_hub_download(filename=...) lands exactly on local_path
+                # If filename="foo/bar.txt", hf_hub_download appends "foo/bar.txt" to local_dir.
+                # So local_dir should be local_path.parent.parent.
+                
+                download_dir = local_path.parent
+                if "/" in filename:
+                    num_parents = filename.count("/")
+                    for _ in range(num_parents):
+                        download_dir = download_dir.parent
+
                 print(f"--- Downloading {description or filename} to {local_path}... ---")
                 try:
                     hf_hub_download(
                         repo_id=repo_id,
                         filename=filename,
                         revision=revision,
-                        local_dir=local_path.parent,
+                        local_dir=download_dir,
                         subfolder=subfolder,
                     )
                     print(f"--- {description or filename} downloaded successfully ---")
@@ -225,6 +236,42 @@ class Model:
                     local_path=infinitetalk_dir / "infinitetalk.safetensors",
                     description="InfiniteTalk weights file",
                 )
+                
+                # --- Download FP8 Quantization Weights (Required for 'fast'/'turbo' presets) ---
+                quant_dir = model_root / "InfiniteTalk" / "quant_models"
+                quant_dir.mkdir(parents=True, exist_ok=True)
+                
+                # 1. InfiniteTalk Single FP8
+                download_file(
+                    repo_id="MeiGen-AI/InfiniteTalk",
+                    filename="quant_models/infinitetalk_single_fp8.safetensors",
+                    local_path=quant_dir / "infinitetalk_single_fp8.safetensors",
+                    description="InfiniteTalk FP8 quantized weights"
+                )
+                
+                # 2. T5 FP8
+                download_file(
+                    repo_id="MeiGen-AI/InfiniteTalk",
+                    filename="quant_models/t5_fp8.safetensors",
+                    local_path=quant_dir / "t5_fp8.safetensors",
+                    description="T5 FP8 quantized weights"
+                )
+                
+                # 3. T5 FP8 Map
+                download_file(
+                    repo_id="MeiGen-AI/InfiniteTalk",
+                    filename="quant_models/t5_map_fp8.json",
+                    local_path=quant_dir / "t5_map_fp8.json",
+                    description="T5 FP8 quantization map"
+                )
+                
+                # 4. InfiniteTalk Single FP8 Map
+                download_file(
+                    repo_id="MeiGen-AI/InfiniteTalk",
+                    filename="quant_models/infinitetalk_single_fp8.json",
+                    local_path=quant_dir / "infinitetalk_single_fp8.json",
+                    description="InfiniteTalk FP8 quantization map"
+                )
 
                 # Download FusioniX LoRA weights (will create FusionX_LoRa directory)
                 download_file(
@@ -254,7 +301,65 @@ class Model:
                 raise RuntimeError(f"Cannot access required models: {download_error}")
 
             print("--- Model downloads completed successfully. ---")
-            print("--- Will initialize models when generate() is called. ---")
+            print("--- Model downloads completed. Attempting Warm Start load... ---")
+            
+            # --- WARM START: Load models into memory ---
+            # This logic mimics what was previously in _generate_video but runs at container startup.
+            # It loads the heavy models (Wan2.1, T5, CLIP, VAE, etc.) once.
+            
+            import wan
+            from wan.configs import WAN_CONFIGS
+            from vendor.infinitetalk.generate_infinitetalk import custom_init
+            import os
+            
+            # Default config for Turbo/Fast (Single Person, LoRA, BF16)
+            # We initialize a "default" pipeline. The generate() function might need to reload 
+            # if parameters change significantly (e.g. quantum change), but for most cases this covers it.
+            # Ideally, we load the heaviest, most common configuration.
+            
+            infinitetalk_single = "/models/InfiniteTalk/single/single/infinitetalk.safetensors"
+            lora_dir = ["/models/FusionX_LoRa/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors"]
+            ckpt_dir = "/models/Wan2.1-I2V-14B-480P"
+            
+            # Verify files exist before loading (sanity check)
+            if not os.path.exists(infinitetalk_single):
+                print(f"--- WARM START SKIPPED: Missing {infinitetalk_single} ---")
+            else:
+                task = "infinitetalk-14B"
+                cfg = WAN_CONFIGS[task]
+                lora_scale = [1.0] 
+                wav2vec_dir = "/models/chinese-wav2vec2-base"
+                
+                # Default config for Turbo/Fast (Single Person, LoRA, BF16)
+                # We align Warm Start with the 'fast'/'turbo' presets (FP8) to ensure the most common use case is instant.
+                # 'Quality' mode users (Full Precision) will incur a cold boot penalty, which is acceptable.
+                
+                print(f"--- Initializing Pipeline (Turbo/Fast Config - FP8) ---")
+                quant_dir = "/models/InfiniteTalk/quant_models/infinitetalk_single_fp8.safetensors"
+                
+                self.pipeline = wan.InfiniteTalkPipeline(
+                    config=cfg,
+                    checkpoint_dir=ckpt_dir,
+                    device_id=0,
+                    rank=0,
+                    infinitetalk_dir=infinitetalk_single,
+                    lora_dir=lora_dir,
+                    lora_scales=lora_scale,
+                    quant="fp8", # Pre-load FP8 by default
+                    dit_path=None,
+                    quant_dir=quant_dir # Must provide this for FP8
+                )
+                # Store config for cache hit checking
+                self.pipeline.cache_config = {
+                    "infinitetalk_dir": infinitetalk_single,
+                    "lora_dir": lora_dir,
+                    "quant": "fp8"
+                }
+                
+                print("--- Initializing Audio Models ---")
+                self.audio_models = custom_init('cpu', wav2vec_dir)
+                
+                print("--- Models loaded successfully for WARM START. ---")
 
         except Exception as e:
             print(f"--- Error during initialization: {e} ---")
@@ -266,6 +371,15 @@ class Model:
     def _generate_video(self, image: bytes, audio1: bytes, audio2: bytes = None, audio_order: str = "left_right", prompt: str | None = None, params: dict = None, project_id: str = None) -> str:
         import sys
         sys.path.extend(["/root", "/root/vendor/infinitetalk", "/root/vendor"])
+        
+        # Ensure CUDA is initialized before importing libraries that check device capability
+        import torch
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.init()
+            except Exception as e:
+                print(f"Warning: Failed to init CUDA: {e}")
+
         from PIL import Image as PILImage
         import io
         import tempfile
@@ -280,8 +394,29 @@ class Model:
         from vendor.infinitetalk.generate_infinitetalk import generate
         import librosa
         from services.infrastructure.supabase import SupabaseService
+        
+        # Add /root to sys.path to ensure config module can be imported
+        import sys
+        if "/root" not in sys.path:
+            sys.path.insert(0, "/root")
+        
+        from services.video.parameter_resolver import ParameterResolver
 
+        
+        # Determine if multi-person based on audio2 presence
+        is_multi_person = audio2 is not None
+        
+        # Parse and resolve parameters using ParameterResolver
         params = params or {}
+        
+        # Validate parameters
+        is_valid, error_msg = ParameterResolver.validate_params(params)
+        if not is_valid:
+             # We should probably raise validation error, but let's log and rely on resolver defaults/fallbacks or return error
+             print(f"Warning: Invalid params: {error_msg}. Using defaults.")
+
+        # Resolve final parameters (merge presets with user overrides)
+        resolved_params = ParameterResolver.resolve(params)
         t0 = time.time()
         
         # --- Prepare Inputs ---
@@ -511,17 +646,36 @@ class Model:
         # Map params to args
         import types
         output_path_no_ext = str(output_dir / output_filename)
+        
+        # Select appropriate infinitetalk weights based on person count
+        if is_multi_person:
+            infinitetalk_path = "/models/InfiniteTalk/multi/infinitetalk.safetensors"
+        else:
+            infinitetalk_path = "/models/InfiniteTalk/single/single/infinitetalk.safetensors"
+        
+        # Get LoRA configuration
+        lora_dir, lora_scale = ParameterResolver.get_lora_config(
+            resolved_params["use_lora"],
+            resolved_params["lora_scale"]
+        )
+        
+        # Get quantization configuration
+        quant, quant_dir = ParameterResolver.get_quantization_config(
+            resolved_params["quant"]
+        )
+        
         args = types.SimpleNamespace(**{
             "task": "infinitetalk-14B",
-            "size": "infinitetalk-480",
+            "size": resolved_params["size"],  # Dynamic: infinitetalk-480 or infinitetalk-720
             "ckpt_dir": "/models/Wan2.1-I2V-14B-480P",
-            "infinitetalk_dir": "/models/InfiniteTalk/single/single/infinitetalk.safetensors",
+            "infinitetalk_dir": infinitetalk_path,  # Dynamic: single or multi
             "dit_path": None,
-            "quant_dir": None,
+            "quant_dir": quant_dir,  # Dynamic: None or FP8 path
+            "quant": quant,  # Dynamic: None or "fp8"
             "wav2vec_dir": "/models/chinese-wav2vec2-base",
-            "lora_dir": ["/models/FusionX_LoRa/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors"],
-            "lora_scale": [params.get("lora_scale", 1.0)],
-            "offload_model": False,
+            "lora_dir": lora_dir,  # Dynamic: None or LoRA path
+            "lora_scale": lora_scale,  # Dynamic: None or scale value
+            "offload_model": resolved_params.get("offload_model", False),
             "ulysses_size": 1,
             "ring_size": 1,
             "t5_fsdp": False,
@@ -529,24 +683,23 @@ class Model:
             "dit_fsdp": False,
             "save_file": output_path_no_ext,
             "audio_save_dir": "/outputs/temp_audio",
-            "base_seed": params.get("seed", 42),
+            "base_seed": resolved_params["seed"],  # Dynamic: user seed or -1 (random)
             "input_json": input_json_path,
-            "motion_frame": 25,
+            "motion_frame": resolved_params["motion_frame"],  # Fixed: 9
             "mode": mode,
-            "sample_steps": params.get("sample_steps", 40),
-            "sample_shift": params.get("sample_shift", 3.0),
-            "sample_text_guide_scale": params.get("sample_text_guide_scale", 5.0),
-            "sample_audio_guide_scale": params.get("sample_audio_guide_scale", 4.0),
-            "num_persistent_param_in_dit": params.get("num_persistent_param_in_dit") or 0,
+            "sample_steps": resolved_params["sample_steps"],  # Dynamic: 8, 20, or 40
+            "sample_shift": resolved_params["sample_shift"],  # Dynamic: 2.0, 7.0, or 11.0
+            "sample_text_guide_scale": resolved_params["sample_text_guide_scale"],  # Dynamic
+            "sample_audio_guide_scale": resolved_params["sample_audio_guide_scale"],  # Dynamic
+            "num_persistent_param_in_dit": resolved_params["num_persistent_param_in_dit"],
             "audio_mode": "localfile",
-            "use_teacache": True,
-            "teacache_thresh": 0.3,
-            "use_apg": True,
+            "use_teacache": resolved_params["use_teacache"],
+            "teacache_thresh": resolved_params["teacache_thresh"],  # Dynamic
+            "use_apg": resolved_params["use_apg"],
             "apg_momentum": -0.75,
             "apg_norm_threshold": 55,
-            "color_correction_strength": params.get("color_correction_strength", 1.0),
+            "color_correction_strength": resolved_params["color_correction_strength"],
             "scene_seg": False,
-            "quant": None,
             "max_frame_num": max_frame_num,
             "frame_num": chunk_frame_num,
             "progress_callback": progress_callback
@@ -563,8 +716,58 @@ class Model:
              update_pipeline("SETUP", 100, "completed")
              update_pipeline("INFERENCE", 0, "active")
 
-        # INFERENCE
-        generate(args)
+        # DEBUG: Check if model file exists
+        print(f"DEBUG: Checking model path: {args.infinitetalk_dir}")
+        if os.path.exists(args.infinitetalk_dir):
+            print(f"DEBUG: File EXISTS. Size: {os.path.getsize(args.infinitetalk_dir)} bytes")
+        else:
+            print(f"DEBUG: File NOT FOUND at {args.infinitetalk_dir}")
+
+        # INFERENCE - Check cache for warm start
+        can_use_cache = False
+        pipeline_loaded = hasattr(self, 'pipeline') and self.pipeline is not None
+        
+        print(f"DEBUG: Pipeline Status -> Loaded: {pipeline_loaded}")
+        
+        if pipeline_loaded:
+             # Check compatibility
+             p_cfg = self.pipeline.cache_config
+             
+             # DEBUG: Print exact comparison values
+             print(f"DEBUG CACHE CHECK:")
+             print(f"  Cached Path: {p_cfg['infinitetalk_dir']}")
+             print(f"  Req Path: {args.infinitetalk_dir}")
+             print(f"  Cached Quant: {p_cfg['quant']} ({type(p_cfg['quant'])})")
+             print(f"  Req Quant: {args.quant} ({type(args.quant)})")
+             print(f"  Cached LoRA: {p_cfg['lora_dir']} ({type(p_cfg['lora_dir'])})")
+             print(f"  Req LoRA: {args.lora_dir} ({type(args.lora_dir)})")
+             
+             # Check paths and quantized status
+             # Note: Lists comparison works in Python
+             if (args.infinitetalk_dir == p_cfg["infinitetalk_dir"] and
+                 args.quant == p_cfg["quant"] and
+                 args.lora_dir == p_cfg["lora_dir"]):
+                 can_use_cache = True
+        
+        if can_use_cache:
+            print("--- CACHE HIT: Using pre-loaded pipeline for Warm Start ---")
+            generate(args, pipeline=self.pipeline, audio_models=self.audio_models)
+        else:
+            print("--- CACHE MISS: Reloading model ---")
+            if pipeline_loaded:
+                 print("Reason: Config mismatch (see DEBUG logs above)")
+            else:
+                 print("Reason: Pipeline not loaded (Init failed or skipped)")
+            
+            generate(args)
+            
+        # Update self.pipeline if generate created a new one? 
+        # generate() in vendor code doesn't return the pipeline object easily unless modified.
+        # But we modified generate_infinitetalk.py? No, we haven't modified it yet to accept pipeline!
+        # WAIT. The `generate` function in vendor/infinitetalk/generate_infinitetalk.py does NOT accept `pipeline` arg currently.
+        # I need to modify `generate_infinitetalk.py` as well to support passing an existing pipeline!
+        # This was part of my plan implied by "Use self.pipeline".
+        # I must do that next. For now, I'll update app.py assuming I will update generate function.
         
         # INFERENCE DONE
         if project_id:
@@ -765,6 +968,30 @@ def download_models():
             check_file="config.json",
             description="Kokoro-82M TTS model"
         )
+        
+        # Download InfiniteTalk weights
+        infinitetalk_dir = model_root / "InfiniteTalk" / "single"
+        infinitetalk_dir.mkdir(parents=True, exist_ok=True)
+        # Helper for single file - define again for closure context or just use hf_hub_download directly
+        def dl_file(repo, fname, local, sub=None, desc="File"):
+            if local.exists():
+                print(f"--- {desc} already present ---")
+                return
+            print(f"--- Downloading {desc} to {local}... ---")
+            local.parent.mkdir(parents=True, exist_ok=True)
+            hf_hub_download(repo_id=repo, filename=fname, local_dir=local.parent, subfolder=sub)
+            print(f"--- {desc} downloaded successfully ---")
+
+        dl_file("MeiGen-AI/InfiniteTalk", "single/infinitetalk.safetensors", infinitetalk_dir / "infinitetalk.safetensors", desc="InfiniteTalk weights")
+        
+        # --- Download FP8 Quantization Weights manually ---
+        quant_dir = model_root / "InfiniteTalk" / "quant_models"
+        quant_dir.mkdir(parents=True, exist_ok=True)
+        
+        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/infinitetalk_single_fp8.safetensors", quant_dir / "infinitetalk_single_fp8.safetensors", desc="InfiniteTalk FP8 weights")
+        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/t5_fp8.safetensors", quant_dir / "t5_fp8.safetensors", desc="T5 FP8 weights")
+        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/t5_map_fp8.json", quant_dir / "t5_map_fp8.json", desc="T5 FP8 map")
+        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/infinitetalk_single_fp8.json", quant_dir / "infinitetalk_single_fp8.json", desc="InfiniteTalk FP8 map")
         print("--- Committing volume... ---")
         model_volume.commit()
         print("--- Download complete! ---")

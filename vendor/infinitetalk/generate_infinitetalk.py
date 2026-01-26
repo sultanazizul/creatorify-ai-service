@@ -470,7 +470,7 @@ def process_tts_multi(text, save_dir, voice1, voice2):
     # sum, _ = librosa.load(save_path_sum, sr=16000)
     return s1, s2, save_path_sum
 
-def generate(args):
+def generate(args, pipeline=None, audio_models=None):
     rank = int(os.getenv("RANK", 0))
     world_size = int(os.getenv("WORLD_SIZE", 1))
     local_rank = int(os.getenv("LOCAL_RANK", 0))
@@ -542,22 +542,30 @@ def generate(args):
     
 
     logging.info("Creating infinitetalk pipeline.")
-    wan_i2v = wan.InfiniteTalkPipeline(
-        config=cfg,
-        checkpoint_dir=args.ckpt_dir,
-        quant_dir=args.quant_dir,
-        device_id=device,
-        rank=rank,
-        t5_fsdp=args.t5_fsdp,
-        dit_fsdp=args.dit_fsdp, 
-        use_usp=(args.ulysses_size > 1 or args.ring_size > 1),  
-        t5_cpu=args.t5_cpu,
-        lora_dir=args.lora_dir,
-        lora_scales=args.lora_scale,
-        quant=args.quant,
-        dit_path=args.dit_path,
-        infinitetalk_dir=args.infinitetalk_dir
-    )
+    
+    if pipeline is not None:
+        print("--- Using pre-loaded InfiniteTalk Pipeline ---")
+        wan_i2v = pipeline
+        # Ensure we set device if it differs, though typically it matches
+        # wan_i2v.device = torch.device(f"cuda:{device}") 
+    else:
+        print("--- Initializing InfiniteTalk Pipeline (New) ---")
+        wan_i2v = wan.InfiniteTalkPipeline(
+            config=cfg,
+            checkpoint_dir=args.ckpt_dir,
+            quant_dir=args.quant_dir,
+            device_id=device,
+            rank=rank,
+            t5_fsdp=args.t5_fsdp,
+            dit_fsdp=args.dit_fsdp, 
+            use_usp=(args.ulysses_size > 1 or args.ring_size > 1),  
+            t5_cpu=args.t5_cpu,
+            lora_dir=args.lora_dir,
+            lora_scales=args.lora_scale,
+            quant=args.quant,
+            dit_path=args.dit_path,
+            infinitetalk_dir=args.infinitetalk_dir
+        )
     if args.num_persistent_param_in_dit is not None:
         wan_i2v.vram_management = True
         wan_i2v.enable_vram_management(
@@ -568,7 +576,14 @@ def generate(args):
     with open(args.input_json, 'r', encoding='utf-8') as f:
         input_data = json.load(f)
         
-    wav2vec_feature_extractor, audio_encoder= custom_init('cpu', args.wav2vec_dir)
+    # --- Custom Init (Audio Models) ---
+    if audio_models is not None:
+        print("--- Using pre-loaded Audio Models ---")
+        wav2vec_feature_extractor, audio_encoder = audio_models
+    else:
+        print("--- Initializing Audio Models ---")
+        wav2vec_feature_extractor, audio_encoder = custom_init('cpu', args.wav2vec_dir)
+        
     args.audio_save_dir = os.path.join(args.audio_save_dir, input_data['cond_video'].split('/')[-1].split('.')[0])
     os.makedirs(args.audio_save_dir,exist_ok=True)
     

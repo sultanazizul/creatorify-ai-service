@@ -10,7 +10,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Chatterbox microservice URL
-CHATTERBOX_SERVICE_URL = "https://sultanazizul--chatterbox-tts-service-fastapi-app.modal.run"
+CHATTERBOX_SERVICE_URL = "https://management-sazporto--chatterbox-tts-service-fastapi-app.modal.run"
 
 
 class ChatterboxVCService:
