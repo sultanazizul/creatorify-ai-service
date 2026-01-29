@@ -1,310 +1,193 @@
-import logging
-from typing import Dict, Any, Tuple
+# Parameter Resolver Service for InfiniteTalk
 
-logger = logging.getLogger(__name__)
+"""
+Resolves final generation parameters by merging presets with user overrides.
+Priority: User Manual Override > Preset > Default
+"""
+
+from typing import Dict, Any, Optional
+import sys
+import os
+
+# Add root directory to sys.path to ensure config can be imported
+# This is necessary because in Modal, the execution context might vary
+if "/root" not in sys.path:
+    sys.path.insert(0, "/root")
+
+try:
+    from config.infinitetalk_presets import QUALITY_PRESETS, RESOLUTION_CONFIGS
+except ImportError:
+    # Fallback: try relative import if running locally or different structure
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
+    from config.infinitetalk_presets import QUALITY_PRESETS, RESOLUTION_CONFIGS
 
 class ParameterResolver:
     """
-    Handles resolution of InfiniTalk video generation parameters.
-    Maps high-level presets (turbo, fast, quality, low_vram) to low-level arguments.
+    Resolves final parameters by merging presets with user overrides.
     """
     
-    # --- Presets Configuration ---
-    PRESETS = {
-        "turbo": {
-            "name": "Turbo (Experimental)",
-            "description": "Ultra-fast generation (4 steps) using LoRA. Lowest latency.",
-            "sample_steps": 4,
-            "sample_shift": 2.0,
-            "sample_text_guide_scale": 1.0,
-            "sample_audio_guide_scale": 2.0,
-            "lora_scale": 1.0,
-            "use_lora": True,
-            "use_quantization": False,
-            "size": "infinitetalk-480",
-            "quant": "fp8", 
-            "offload_model": False, # H100: Disable offloading 
-            "num_persistent_param_in_dit": None, # Disable VRAM management
-            "estimated_time_10s": "1-2 minutes",
-            "estimated_time_30s": "3-4 minutes",
-            "estimated_time_60s": "6-8 minutes",
-            "quality_score": "7/10",
-            "use_case": "Real-time interactions, rapid prototyping"
-        },
-        "fast": {
-            "name": "Fast (Recommended)",
-            "description": "8 steps with LoRA. Balanced speed/quality for production.",
-            "sample_steps": 8,
-            "sample_shift": 2.0,
-            "sample_text_guide_scale": 1.0,
-            "sample_audio_guide_scale": 2.0,
-            "lora_scale": 1.0,
-            "use_lora": True,
-            "size": "infinitetalk-480",
-            "quant": "fp8", # Forced fp8 for speed
-            "use_quantization": False, # Logical flag, but we use fp8 internally
-            "offload_model": False, 
-            "num_persistent_param_in_dit": None,
-            "estimated_time_10s": "2-3 minutes",
-            "estimated_time_30s": "6-9 minutes",
-            "estimated_time_60s": "15-20 minutes",
-            "quality_score": "8/10",
-            "use_case": "Social media, general production"
-        },
-        "balanced": {
-            "name": "Balanced",
-            "description": "20 steps with LoRA. Higher detail.",
-            "sample_steps": 20,
-            "sample_shift": 2.5,
-            "sample_text_guide_scale": 2.0,
-            "sample_audio_guide_scale": 3.0,
-            "lora_scale": 1.0,
-            "use_lora": True,
-            "size": "infinitetalk-480",
-            "quant": "fp8",
-            "offload_model": False,
-            "num_persistent_param_in_dit": None,
-            "estimated_time_10s": "4-5 minutes",
-            "estimated_time_30s": "10-14 minutes",
-            "estimated_time_60s": "22-28 minutes",
-            "quality_score": "8.5/10",
-            "use_case": "Important presentations, high detail needs"
-        },
-        "quality": {
-            "name": "Quality (Maximum)",
-            "description": "40 steps, No LoRA. Standard high-quality generation.",
-            "sample_steps": 40,
-            "sample_shift": None,
-            "sample_text_guide_scale": 5.0,
-            "sample_audio_guide_scale": 4.0,
-            "lora_scale": 0.0,
-            "use_lora": False,
-            "size": "infinitetalk-480",
-            "quant": None,
-            "offload_model": False,
-            "num_persistent_param_in_dit": None,
-            "estimated_time_10s": "8-10 minutes",
-            "estimated_time_30s": "20-30 minutes",
-            "estimated_time_60s": "50-60 minutes",
-            "quality_score": "9/10",
-            "use_case": "Final production, cinema quality"
-        },
-        "low_vram": {
-            "name": "Low VRAM (Cost Effective)",
-            "description": "FP8 Quantization + Memory Optimization. Fits on smaller GPUs.",
-            "sample_steps": 40,
-            "sample_shift": None,
-            "sample_text_guide_scale": 5.0,
-            "sample_audio_guide_scale": 4.0,
-            "lora_scale": 0.0,
-            "use_lora": False,
-            "use_quantization": True,
-            "size": "infinitetalk-480",
-            "quant": "fp8",
-            "offload_model": True, # Aggressive offloading
-            "num_persistent_param_in_dit": 0, # Minimal VRAM
-            "estimated_time_10s": "9-12 minutes",
-            "estimated_time_30s": "25-35 minutes",
-            "estimated_time_60s": "55-70 minutes",
-            "quality_score": "8.5/10",
-            "use_case": "Running on T4/A10G with high resolution"
-        }
-    }
-    
-    # Resolution Configurations
-    RESOLUTION_CONFIGS: Dict[str, Dict[str, Any]] = {
-        "480p": {
-            "size": "infinitetalk-480",
-            "base_resolution": (640, 640),
-            "sample_shift_no_lora": 7.0,  # From official docs
-            "vram_required": "18-20GB",
-            "aspect_ratio_buckets": 15,
-            "description": "Standard resolution, fast processing"
-        },
-        "720p": {
-            "size": "infinitetalk-720",
-            "base_resolution": (960, 960),
-            "sample_shift_no_lora": 11.0,  # From official docs
-            "vram_required": "24-28GB",
-            "aspect_ratio_buckets": 21,
-            "description": "High resolution, requires more VRAM"
-        }
-    }
-
-    # VRAM Requirements Matrix
-    VRAM_REQUIREMENTS: Dict[str, Dict[str, str]] = {
-        "fast_480p": "18GB",
-        "fast_720p": "24GB",
-        "balanced_480p": "19GB",
-        "balanced_720p": "25GB",
-        "quality_480p": "20GB",
-        "quality_720p": "28GB",
-        "fast_480p_fp8": "12GB",
-        "quality_480p_fp8": "14GB",
-    }
-
-    # Default fallback preset
-    DEFAULT_PRESET = "fast" 
-
-    @classmethod
-    def resolve(cls, params: Dict[str, Any]) -> Dict[str, Any]:
+    @staticmethod
+    def resolve(params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Resolves final generation parameters by merging:
-        1. Default Preset (base)
-        2. Selected Preset (if any)
-        3. User Overrides (e.g. specific step count)
+        Resolve final generation parameters.
+        
+        Args:
+            params: User-provided parameters (can include preset or manual values)
+        
+        Returns:
+            Dict with all parameters ready for InfiniteTalk generation
         """
-        params = params or {}
+        # Get preset (default to "fast")
+        preset_name = params.get("quality_preset", "fast")
+        if preset_name not in QUALITY_PRESETS:
+            preset_name = "fast"
         
-        # 1. Identify Preset
-        preset_key = params.get("quality_preset", cls.DEFAULT_PRESET)
-        if preset_key not in cls.PRESETS:
-            logger.warning(f"Unknown preset '{preset_key}', falling back to '{cls.DEFAULT_PRESET}'")
-            preset_key = cls.DEFAULT_PRESET
+        preset = QUALITY_PRESETS[preset_name]
+        
+        # Get resolution config (default to "480p")
+        resolution = params.get("resolution", "480p")
+        if resolution not in RESOLUTION_CONFIGS:
+            resolution = "480p"
+        
+        resolution_config = RESOLUTION_CONFIGS[resolution]
+        
+        # Start with preset values
+        resolved = {
+            "size": resolution_config["size"],
+            "sample_steps": preset["sample_steps"],
+            "sample_text_guide_scale": preset["sample_text_guide_scale"],
+            "sample_audio_guide_scale": preset["sample_audio_guide_scale"],
+            "lora_scale": preset["lora_scale"],
+            "use_lora": preset["use_lora"],
+        }
+        
+        # Resolve sample_shift
+        if params.get("sample_shift") is not None:
+            # User manual override
+            resolved["sample_shift"] = params["sample_shift"]
+        elif preset["sample_shift"] is not None:
+            # Preset value (for LoRA modes: Fast/Balanced)
+            resolved["sample_shift"] = preset["sample_shift"]
+        else:
+            # Auto-calculate for non-LoRA (Quality mode)
+            resolved["sample_shift"] = resolution_config["sample_shift_no_lora"]
+        
+        # Apply user manual overrides
+        if params.get("sample_steps") is not None:
+            resolved["sample_steps"] = params["sample_steps"]
+        
+        if params.get("sample_text_guide_scale") is not None:
+            resolved["sample_text_guide_scale"] = params["sample_text_guide_scale"]
+        
+        if params.get("sample_audio_guide_scale") is not None:
+            resolved["sample_audio_guide_scale"] = params["sample_audio_guide_scale"]
+        
+        if params.get("lora_scale") is not None:
+            resolved["lora_scale"] = params["lora_scale"]
+        
+        if params.get("use_lora") is not None:
+            resolved["use_lora"] = params["use_lora"]
+            # If user disables LoRA, set lora_scale to 0
+            if not params["use_lora"]:
+                resolved["lora_scale"] = 0.0
+        
+        # Other parameters with defaults
+        resolved.update({
+            "color_correction_strength": params.get("color_correction_strength") if params.get("color_correction_strength") is not None else 0.2,
+            "num_persistent_param_in_dit": params.get("num_persistent_param_in_dit") if params.get("num_persistent_param_in_dit") is not None else 0,
+            "seed": params.get("seed") if params.get("seed") is not None else -1,  # -1 means random
+            "frame_num": params.get("frame_num"),  # None means auto-calculate
+            # Logic: If param is None, use preset default (which is True for Fast, False for Quality)
+            # If param is explicitly False, use False.
+            "use_quantization": params.get("use_quantization") if params.get("use_quantization") is not None else preset.get("use_quantization", False),
+            "use_teacache": params.get("use_teacache", True),
+            "teacache_thresh": params.get("teacache_thresh", 0.2),
+            "use_apg": params.get("use_apg", True),
+            "motion_frame": 9,  # Fixed optimal value
             
-        # 2. Load Preset Config
-        resolved = cls.PRESETS[preset_key].copy()
-        
-        # 3. Apply Explicit Overrides (only if key provided in params)
-        # Allowable overrides: steps, seed, guidance scales, shift
-        allowlist = [
-            "sample_steps", "seed", "sample_shift", 
-            "sample_text_guide_scale", "sample_audio_guide_scale",
-            "color_correction_strength", "num_persistent_param_in_dit"
-        ]
-        
-        for key in allowlist:
-            if key in params and params[key] is not None:
-                resolved[key] = params[key]
-                
-        # 4. Handle Logical Dependencies
-        
-        # 4.1 Resolution override
-        if params.get("resolution") == "720p":
-            resolved["size"] = "infinitetalk-720"
-            if resolved.get("sample_shift") is None or resolved["sample_shift"] < 11.0:
-                 resolved["sample_shift"] = 11.0
-        elif params.get("resolution") == "480p":
-            resolved["size"] = "infinitetalk-480"
-
-        # 4.2 LoRA Configuration logic
-        # If 'turbo' is manually requested but lora_scale is 0, disable LoRA
-        if resolved.get("use_lora") and resolved.get("lora_scale", 1.0) == 0:
-            resolved["use_lora"] = False
-            
-        # 4.3 Quantization override
-        # If explicit quant mode is requested
-        if params.get("quantization_mode"):
-             resolved["quant"] = params["quantization_mode"] # e.g. 'fp8' or None
-
-        # 4.4 Advanced VRAM settings
-        # Consolidate standard params
-        generated_seed = params.get("seed")
-        resolved["seed"] = generated_seed if generated_seed is not None else 42
-        resolved["motion_frame"] = params.get("motion_frame", 25)
-
-        # Teacache & APG are always enabled in app.py currently, let's keep them unless disabled
-        resolved["use_teacache"] = True
-        resolved["teacache_thresh"] = 0.3
-        resolved["use_apg"] = True
-        resolved["apg_momentum"] = -0.75
-        resolved["apg_norm_threshold"] = 55
-        
-        # Ensure offload defaults to False if not set
-        if "offload_model" not in resolved:
-            resolved["offload_model"] = False
-        # Ensure param_in_dit defaults to None if not set
-        if "num_persistent_param_in_dit" not in resolved:
-            resolved["num_persistent_param_in_dit"] = None
+            # Metadata for tracking
+            "preset_used": preset_name,
+            "resolution_used": resolution,
+        })
         
         return resolved
-
-    @staticmethod
-    def validate_params(params: Dict[str, Any]) -> Tuple[bool, str]:
-        """Validates input parameters."""
-        # Check step limits
-        steps = params.get("sample_steps")
-        if steps and (steps < 1 or steps > 100):
-            return False, "sample_steps must be between 1 and 100"
-            
-        # Check resolution
-        res = params.get("resolution")
-        if res and res not in ["480p", "720p"]:
-            return False, "resolution must be '480p' or '720p'"
-            
-        return True, ""
-
-    @staticmethod
-    def get_lora_config(use_lora: bool, scale: float = 1.0):
-        """Helper to get LoRA paths for app.py"""
-        if not use_lora:
-            return None, None
-            
-        lora_dir = ["/models/FusionX_LoRa/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors"]
-        lora_scale = [scale]
-        return lora_dir, lora_scale
-
-    @staticmethod
-    def get_quantization_config(quant_mode: str):
-        """Helper to get quantization paths"""
-        if not quant_mode or quant_mode != "fp8":
-            return None, None
-            
-        # Path to FP8 weights
-        quant_dir = "/models/InfiniteTalk/quant_models/infinitetalk_single_fp8.safetensors" 
-        return "fp8", quant_dir
     
     @staticmethod
-    def get_estimated_time(preset: str, resolution: str, duration_seconds: int) -> str:
+    def get_lora_config(use_lora: bool, lora_scale: float) -> tuple:
         """
-        Get estimated processing time based on configuration.
+        Get LoRA directory and scale configuration.
         
         Args:
-            preset: Quality preset name
-            resolution: Resolution (480p/720p)
-            duration_seconds: Video duration in seconds
+            use_lora: Whether to use LoRA
+            lora_scale: LoRA scale value
         
         Returns:
-            Estimated time as string
+            Tuple of (lora_dir, lora_scale) or (None, None)
         """
-        preset_config = ParameterResolver.PRESETS.get(preset, ParameterResolver.PRESETS["fast"])
-        
-        # Base times for 10s video
-        base_times = {
-            "fast": {"480p": 2.5, "720p": 4.0},  # LoRA-only (no FP8)
-            "balanced": {"480p": 3.5, "720p": 6.0},
-            "quality": {"480p": 7.0, "720p": 12.5}
-        }
-        
-        base_time = base_times.get(preset, base_times["fast"]).get(resolution, 1.5)
-        
-        # Scale linearly with duration
-        estimated_minutes = (duration_seconds / 10.0) * base_time
-        
-        if estimated_minutes < 1:
-            return f"{int(estimated_minutes * 60)} seconds"
-        elif estimated_minutes < 60:
-            return f"{int(estimated_minutes)} minutes"
-        else:
-            hours = int(estimated_minutes / 60)
-            mins = int(estimated_minutes % 60)
-            return f"{hours}h {mins}m"
-
+        if use_lora and lora_scale > 0:
+            lora_dir = ["/models/FusionX_LoRa/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors"]
+            return lora_dir, [lora_scale]
+        return None, None
+    
     @staticmethod
-    def get_vram_requirement(preset: str, resolution: str, use_quantization: bool = False) -> str:
+    def get_quantization_config(use_quantization: bool) -> tuple:
         """
-        Get VRAM requirement for a configuration.
+        Get quantization configuration.
         
         Args:
-            preset: Quality preset name
-            resolution: Resolution (480p/720p)
-            use_quantization: Whether FP8 quantization is enabled
+            use_quantization: Whether to use FP8 quantization
         
         Returns:
-            VRAM requirement as string
+            Tuple of (quant, quant_dir) or (None, None)
         """
-        key = f"{preset}_{resolution}"
         if use_quantization:
-            key += "_fp8"
+            return "fp8", "/models/InfiniteTalk/quant_models/infinitetalk_single_fp8.safetensors"
+        return None, None
+    
+    @staticmethod
+    def validate_params(params: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """
+        Validate user parameters.
         
-        return ParameterResolver.VRAM_REQUIREMENTS.get(key, "20GB")
+        Args:
+            params: User-provided parameters
+        
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        # Validate quality_preset
+        if "quality_preset" in params:
+            if params["quality_preset"] not in QUALITY_PRESETS:
+                return False, f"Invalid quality_preset. Must be one of: {list(QUALITY_PRESETS.keys())}"
+        
+        # Validate resolution
+        if "resolution" in params:
+            if params["resolution"] not in RESOLUTION_CONFIGS:
+                return False, f"Invalid resolution. Must be one of: {list(RESOLUTION_CONFIGS.keys())}"
+        
+        # Validate sample_steps
+        if params.get("sample_steps") is not None:
+            steps = params["sample_steps"]
+            if not isinstance(steps, int) or steps < 1 or steps > 50:
+                return False, "sample_steps must be between 1 and 50"
+        
+        # Validate frame_num (must be 4n+1)
+        if "frame_num" in params and params["frame_num"] is not None:
+            frame_num = params["frame_num"]
+            if (frame_num - 1) % 4 != 0:
+                return False, f"frame_num must be 4n+1 (e.g., 1, 5, 9, 81, 85). Got {frame_num}"
+        
+        # Validate scales
+        for scale_param in ["sample_text_guide_scale", "sample_audio_guide_scale", "lora_scale"]:
+            if params.get(scale_param) is not None:
+                value = params[scale_param]
+                if not isinstance(value, (int, float)) or value < 0 or value > 20:
+                    return False, f"{scale_param} must be between 0 and 20"
+        
+        # Validate color_correction_strength
+        if params.get("color_correction_strength") is not None:
+            value = params["color_correction_strength"]
+            if not isinstance(value, (int, float)) or value < 0 or value > 1:
+                return False, "color_correction_strength must be between 0 and 1"
+        
+        return True, None

@@ -26,6 +26,7 @@ image = (
     .add_local_dir("core", "/root/core", copy=True)
     .add_local_dir("services", "/root/services", copy=True)
     .add_local_dir("models", "/root/models", copy=True)
+    .add_local_dir("config", "/root/config", copy=True)
 
     .apt_install("git", "ffmpeg", "git-lfs", "libmagic1")
     .run_commands("sed -i 's/from inspect import ArgSpec/# from inspect import ArgSpec  # Removed for Python 3.11 compatibility/' /root/vendor/infinitetalk/wan/multitalk.py")
@@ -334,8 +335,8 @@ class Model:
                 # We align Warm Start with the 'fast'/'turbo' presets (FP8) to ensure the most common use case is instant.
                 # 'Quality' mode users (Full Precision) will incur a cold boot penalty, which is acceptable.
                 
-                print(f"--- Initializing Pipeline (Turbo/Fast Config - FP8) ---")
-                quant_dir = "/models/InfiniteTalk/quant_models/infinitetalk_single_fp8.safetensors"
+                print(f"--- Initializing Pipeline (Turbo/Fast Config - BF16) ---")
+                quant_dir = None
                 
                 self.pipeline = wan.InfiniteTalkPipeline(
                     config=cfg,
@@ -345,15 +346,15 @@ class Model:
                     infinitetalk_dir=infinitetalk_single,
                     lora_dir=lora_dir,
                     lora_scales=lora_scale,
-                    quant="fp8", # Pre-load FP8 by default
+                    quant=None, # BF16 by default (matches 'fast' preset)
                     dit_path=None,
-                    quant_dir=quant_dir # Must provide this for FP8
+                    quant_dir=quant_dir
                 )
                 # Store config for cache hit checking
                 self.pipeline.cache_config = {
                     "infinitetalk_dir": infinitetalk_single,
                     "lora_dir": lora_dir,
-                    "quant": "fp8"
+                    "quant": None
                 }
                 
                 print("--- Initializing Audio Models ---")
@@ -661,7 +662,7 @@ class Model:
         
         # Get quantization configuration
         quant, quant_dir = ParameterResolver.get_quantization_config(
-            resolved_params["quant"]
+            resolved_params["use_quantization"]
         )
         
         args = types.SimpleNamespace(**{

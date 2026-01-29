@@ -275,11 +275,7 @@ def _parse_args():
     return args
 
 def custom_init(device, wav2vec):    
-    audio_encoder = Wav2Vec2Model.from_pretrained(
-        wav2vec, 
-        local_files_only=True,
-        attn_implementation="eager"  # Required for output_attentions support
-    ).to(device)
+    audio_encoder = Wav2Vec2Model.from_pretrained(wav2vec, local_files_only=True, attn_implementation="eager").to(device)
     audio_encoder.feature_extractor._freeze_parameters()
     wav2vec_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(wav2vec, local_files_only=True)
     return wav2vec_feature_extractor, audio_encoder
@@ -305,27 +301,11 @@ def audio_prepare_multi(left_path, right_path, audio_type, sample_rate=16000):
         human_speech_array2 = np.zeros(human_speech_array1.shape[0])
 
     if audio_type=='para':
-        # Pad to same length for parallel playback
-        max_len = max(human_speech_array1.shape[0], human_speech_array2.shape[0])
-        
-        if human_speech_array1.shape[0] < max_len:
-            pad_width = max_len - human_speech_array1.shape[0]
-            new_human_speech1 = np.concatenate([human_speech_array1, np.zeros(pad_width)])
-        else:
-            new_human_speech1 = human_speech_array1
-            
-        if human_speech_array2.shape[0] < max_len:
-            pad_width = max_len - human_speech_array2.shape[0]
-            new_human_speech2 = np.concatenate([human_speech_array2, np.zeros(pad_width)])
-        else:
-            new_human_speech2 = human_speech_array2
+        new_human_speech1 = human_speech_array1
+        new_human_speech2 = human_speech_array2
     elif audio_type=='add':
         new_human_speech1 = np.concatenate([human_speech_array1[: human_speech_array1.shape[0]], np.zeros(human_speech_array2.shape[0])]) 
         new_human_speech2 = np.concatenate([np.zeros(human_speech_array1.shape[0]), human_speech_array2[:human_speech_array2.shape[0]]])
-    elif audio_type=='reverse_add':
-        # Right audio (person2) first, then Left audio (person1)
-        new_human_speech1 = np.concatenate([np.zeros(human_speech_array2.shape[0]), human_speech_array1[:human_speech_array1.shape[0]]])
-        new_human_speech2 = np.concatenate([human_speech_array2[: human_speech_array2.shape[0]], np.zeros(human_speech_array1.shape[0])])
     sum_human_speechs = new_human_speech1 + new_human_speech2
     return new_human_speech1, new_human_speech2, sum_human_speechs
 
@@ -541,15 +521,11 @@ def generate(args, pipeline=None, audio_models=None):
     assert args.task == "infinitetalk-14B", 'You should choose infinitetalk in args.task.'
     
 
-    logging.info("Creating infinitetalk pipeline.")
-    
     if pipeline is not None:
-        print("--- Using pre-loaded InfiniteTalk Pipeline ---")
+        logging.info("Using cached InfiniteTalk pipeline.")
         wan_i2v = pipeline
-        # Ensure we set device if it differs, though typically it matches
-        # wan_i2v.device = torch.device(f"cuda:{device}") 
     else:
-        print("--- Initializing InfiniteTalk Pipeline (New) ---")
+        logging.info("Creating infinitetalk pipeline.")
         wan_i2v = wan.InfiniteTalkPipeline(
             config=cfg,
             checkpoint_dir=args.ckpt_dir,
@@ -576,14 +552,10 @@ def generate(args, pipeline=None, audio_models=None):
     with open(args.input_json, 'r', encoding='utf-8') as f:
         input_data = json.load(f)
         
-    # --- Custom Init (Audio Models) ---
     if audio_models is not None:
-        print("--- Using pre-loaded Audio Models ---")
         wav2vec_feature_extractor, audio_encoder = audio_models
     else:
-        print("--- Initializing Audio Models ---")
-        wav2vec_feature_extractor, audio_encoder = custom_init('cpu', args.wav2vec_dir)
-        
+        wav2vec_feature_extractor, audio_encoder= custom_init('cpu', args.wav2vec_dir)
     args.audio_save_dir = os.path.join(args.audio_save_dir, input_data['cond_video'].split('/')[-1].split('.')[0])
     os.makedirs(args.audio_save_dir,exist_ok=True)
     
