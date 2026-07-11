@@ -130,18 +130,22 @@ class ParameterResolver:
         return None, None
     
     @staticmethod
-    def get_quantization_config(use_quantization: bool) -> tuple:
+    def get_quantization_config(use_quantization: bool, is_multi_person: bool = False) -> tuple:
         """
         Get quantization configuration.
         
         Args:
             use_quantization: Whether to use FP8 quantization
+            is_multi_person: Whether it is a multi-person model
         
         Returns:
             Tuple of (quant, quant_dir) or (None, None)
         """
         if use_quantization:
-            return "fp8", "/models/InfiniteTalk/quant_models/infinitetalk_single_fp8.safetensors"
+            if is_multi_person:
+                return "fp8", "/models/InfiniteTalk/quant_models/infinitetalk_multi_fp8.safetensors"
+            else:
+                return "fp8", "/models/InfiniteTalk/quant_models/infinitetalk_single_fp8.safetensors"
         return None, None
     
     @staticmethod

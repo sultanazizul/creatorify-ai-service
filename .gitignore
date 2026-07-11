@@ -51,3 +51,15 @@ venv.bak/
 # Postman
 *.postman_collection.json
 *.postman_environment.json
+
+# Skripsi files and other local resources
+SKRIPSI/
+SKRIPSI.zip
+SKRIPSI.ZIM
+[Ss]kripsi.ZIM
+[Ss]kripsi.zim
+[Ss]kripsi.zip
+[Ss]kripsi/
+app_lama.py
+README_parameter_infinitalk.md
+Readme_parameter_infinititalk.md

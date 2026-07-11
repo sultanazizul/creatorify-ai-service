@@ -36,6 +36,7 @@ image = (
         "pydantic", "python-magic", "huggingface_hub", "soundfile", "librosa",
         "xformers==0.0.28", "supabase", "cloudinary",
         "xfuser==0.4.1",
+        "diffusers==0.31.0",
         "httpx"  # For calling Chatterbox microservice
     )
     .pip_install_from_requirements("vendor/infinitetalk/requirements.txt")
@@ -44,15 +45,15 @@ image = (
 # --- GPU Model Class ---
 @app.cls(
     gpu="H100",
-    enable_memory_snapshot=True,
-    experimental_options={"enable_gpu_snapshot": True},
+    enable_memory_snapshot=False,
     image=image,
     volumes={MODEL_DIR: model_volume, OUTPUT_DIR: output_volume},
     scaledown_window=2,
     timeout=2700,
     secrets=[
         modal.Secret.from_name("supabase-secrets"),
-        modal.Secret.from_name("cloudinary-secrets")
+        modal.Secret.from_name("cloudinary-secrets"),
+        modal.Secret.from_name("email-secrets")
     ]
 )
 class Model:
@@ -228,14 +229,23 @@ class Model:
                     description="wav2vec safetensors file"
                 )
                 
-                # Download InfiniteTalk weights
-                infinitetalk_dir = model_root / "InfiniteTalk" / "single"
-                infinitetalk_dir.mkdir(parents=True, exist_ok=True)
+                # Download InfiniteTalk weights (single and multi)
+                infinitetalk_single_dir = model_root / "InfiniteTalk" / "single"
+                infinitetalk_single_dir.mkdir(parents=True, exist_ok=True)
                 download_file(
                     repo_id="MeiGen-AI/InfiniteTalk",
                     filename="single/infinitetalk.safetensors",
-                    local_path=infinitetalk_dir / "infinitetalk.safetensors",
-                    description="InfiniteTalk weights file",
+                    local_path=infinitetalk_single_dir / "infinitetalk.safetensors",
+                    description="InfiniteTalk single-person weights file",
+                )
+                
+                infinitetalk_multi_dir = model_root / "InfiniteTalk" / "multi"
+                infinitetalk_multi_dir.mkdir(parents=True, exist_ok=True)
+                download_file(
+                    repo_id="MeiGen-AI/InfiniteTalk",
+                    filename="multi/infinitetalk.safetensors",
+                    local_path=infinitetalk_multi_dir / "infinitetalk.safetensors",
+                    description="InfiniteTalk multi-person weights file",
                 )
                 
                 # --- Download FP8 Quantization Weights (Required for 'fast'/'turbo' presets) ---
@@ -247,10 +257,18 @@ class Model:
                     repo_id="MeiGen-AI/InfiniteTalk",
                     filename="quant_models/infinitetalk_single_fp8.safetensors",
                     local_path=quant_dir / "infinitetalk_single_fp8.safetensors",
-                    description="InfiniteTalk FP8 quantized weights"
+                    description="InfiniteTalk Single FP8 quantized weights"
                 )
                 
-                # 2. T5 FP8
+                # 2. InfiniteTalk Multi FP8
+                download_file(
+                    repo_id="MeiGen-AI/InfiniteTalk",
+                    filename="quant_models/infinitetalk_multi_fp8.safetensors",
+                    local_path=quant_dir / "infinitetalk_multi_fp8.safetensors",
+                    description="InfiniteTalk Multi FP8 quantized weights"
+                )
+                
+                # 3. T5 FP8
                 download_file(
                     repo_id="MeiGen-AI/InfiniteTalk",
                     filename="quant_models/t5_fp8.safetensors",
@@ -258,7 +276,7 @@ class Model:
                     description="T5 FP8 quantized weights"
                 )
                 
-                # 3. T5 FP8 Map
+                # 4. T5 FP8 Map
                 download_file(
                     repo_id="MeiGen-AI/InfiniteTalk",
                     filename="quant_models/t5_map_fp8.json",
@@ -266,12 +284,20 @@ class Model:
                     description="T5 FP8 quantization map"
                 )
                 
-                # 4. InfiniteTalk Single FP8 Map
+                # 5. InfiniteTalk Single FP8 Map
                 download_file(
                     repo_id="MeiGen-AI/InfiniteTalk",
                     filename="quant_models/infinitetalk_single_fp8.json",
                     local_path=quant_dir / "infinitetalk_single_fp8.json",
-                    description="InfiniteTalk FP8 quantization map"
+                    description="InfiniteTalk Single FP8 quantization map"
+                )
+
+                # 6. InfiniteTalk Multi FP8 Map
+                download_file(
+                    repo_id="MeiGen-AI/InfiniteTalk",
+                    filename="quant_models/infinitetalk_multi_fp8.json",
+                    local_path=quant_dir / "infinitetalk_multi_fp8.json",
+                    description="InfiniteTalk Multi FP8 quantization map"
                 )
 
                 # Download FusioniX LoRA weights (will create FusionX_LoRa directory)
@@ -308,6 +334,30 @@ class Model:
             # This logic mimics what was previously in _generate_video but runs at container startup.
             # It loads the heavy models (Wan2.1, T5, CLIP, VAE, etc.) once.
             
+            # Monkey-patch diffusers to fix missing imports in vendor code
+            try:
+                import diffusers.models.modeling_utils
+                from transformers.modeling_utils import no_init_weights
+                diffusers.models.modeling_utils.no_init_weights = no_init_weights
+                
+                # Define ContextManagers if missing
+                if not hasattr(diffusers.models.modeling_utils, "ContextManagers"):
+                    import contextlib
+                    class ContextManagers:
+                        def __init__(self, cms):
+                            self.cms = cms
+                            self.stack = contextlib.ExitStack()
+                        def __enter__(self):
+                            for cm in self.cms:
+                                self.stack.enter_context(cm)
+                            return self
+                        def __exit__(self, *args, **kwargs):
+                            self.stack.__exit__(*args, **kwargs)
+                    diffusers.models.modeling_utils.ContextManagers = ContextManagers
+                print("--- Monkey-patched diffusers successfully ---")
+            except Exception as e:
+                print(f"--- Warning: Failed to monkey-patch diffusers: {e} ---")
+            
             import wan
             from wan.configs import WAN_CONFIGS
             from vendor.infinitetalk.generate_infinitetalk import custom_init
@@ -318,7 +368,7 @@ class Model:
             # if parameters change significantly (e.g. quantum change), but for most cases this covers it.
             # Ideally, we load the heaviest, most common configuration.
             
-            infinitetalk_single = "/models/InfiniteTalk/single/single/infinitetalk.safetensors"
+            infinitetalk_single = "/models/InfiniteTalk/single/infinitetalk.safetensors"
             lora_dir = ["/models/FusionX_LoRa/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors"]
             ckpt_dir = "/models/Wan2.1-I2V-14B-480P"
             
@@ -369,7 +419,7 @@ class Model:
             raise
 
     @modal.method()
-    def _generate_video(self, image: bytes, audio1: bytes, audio2: bytes = None, audio_order: str = "left_right", prompt: str | None = None, params: dict = None, project_id: str = None) -> str:
+    def _generate_video(self, image: bytes, audio1: bytes, audio2: bytes = None, audio_order: str = "left_right", prompt: str | None = None, params: dict = None, project_id: str = None, email: str = None) -> str:
         import sys
         sys.path.extend(["/root", "/root/vendor/infinitetalk", "/root/vendor"])
         
@@ -652,7 +702,7 @@ class Model:
         if is_multi_person:
             infinitetalk_path = "/models/InfiniteTalk/multi/infinitetalk.safetensors"
         else:
-            infinitetalk_path = "/models/InfiniteTalk/single/single/infinitetalk.safetensors"
+            infinitetalk_path = "/models/InfiniteTalk/single/infinitetalk.safetensors"
         
         # Get LoRA configuration
         lora_dir, lora_scale = ParameterResolver.get_lora_config(
@@ -662,7 +712,8 @@ class Model:
         
         # Get quantization configuration
         quant, quant_dir = ParameterResolver.get_quantization_config(
-            resolved_params["use_quantization"]
+            resolved_params["use_quantization"],
+            is_multi_person=is_multi_person
         )
         
         args = types.SimpleNamespace(**{
@@ -804,14 +855,14 @@ class Model:
             update_pipeline("UPLOADING", 0, "active")
             
             print(f"Triggering Cloudinary upload for project {project_id}...")
-            upload_video_to_cloudinary.spawn(project_id, final_file_name)
+            upload_video_to_cloudinary.spawn(project_id, final_file_name, email)
         else:
             print("Warning: No project_id provided, skipping Cloudinary upload.")
 
         return final_file_name
 
     @modal.method()
-    def submit(self, image_url: str, audio_url: str, audio_url_2: str = None, audio_order: str = "left_right", prompt: str = None, params: dict = None, project_id: str = None):
+    def submit(self, image_url: str, audio_url: str, audio_url_2: str = None, audio_order: str = "left_right", prompt: str = None, params: dict = None, project_id: str = None, email: str = None):
         # Download inputs
         image_bytes = self._download_and_validate(image_url, [
             "image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff",
@@ -824,7 +875,7 @@ class Model:
             audio2_bytes = self._download_and_validate(audio_url_2, ["audio/mpeg", "audio/wav", "audio/x-wav"])
         
         # Spawn generation
-        return self._generate_video.spawn(image_bytes, audio1_bytes, audio2_bytes, audio_order, prompt, params, project_id)
+        return self._generate_video.spawn(image_bytes, audio1_bytes, audio2_bytes, audio_order, prompt, params, project_id, email)
 
 # --- Upload to Cloudinary Function ---
 @app.function(
@@ -832,11 +883,12 @@ class Model:
     volumes={OUTPUT_DIR: output_volume},
     secrets=[
         modal.Secret.from_name("supabase-secrets"),
-        modal.Secret.from_name("cloudinary-secrets")
+        modal.Secret.from_name("cloudinary-secrets"),
+        modal.Secret.from_name("email-secrets")
     ],
     timeout=600
 )
-def upload_video_to_cloudinary(project_id: str, output_filename: str):
+def upload_video_to_cloudinary(project_id: str, output_filename: str, email: str = None):
     """Upload video from volume to Cloudinary and update database."""
     from services.infrastructure.cloudinary import CloudinaryService
     from services.infrastructure.supabase import SupabaseService
@@ -877,6 +929,69 @@ def upload_video_to_cloudinary(project_id: str, output_filename: str):
             # Update database
             # db already initialized above
             db.update_status(project_id, "finished", 100, video_url=video_url)
+            
+            # Send completion email if email is provided
+            if email:
+                try:
+                    from services.infrastructure.email import EmailService
+                    email_service = EmailService()
+                    
+                    title = project.get("title", "Project Tanpa Nama") if project else "Project Tanpa Nama"
+                    
+                    html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #fafafa; color: #111111; margin: 0; padding: 40px 20px; }}
+        .container {{ max-width: 560px; background: #ffffff; margin: 0 auto; border: 1px solid #e5e5e5; padding: 40px; }}
+        .header {{ text-align: left; padding-bottom: 30px; border-bottom: 1px solid #eeeeee; margin-bottom: 30px; }}
+        .header h1 {{ margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.5px; text-transform: uppercase; color: #000000; }}
+        .content {{ line-height: 1.6; font-size: 14px; color: #333333; }}
+        .content p {{ margin: 0 0 20px 0; }}
+        .project-box {{ background: #fdfdfd; padding: 20px; border: 1px solid #eaeaea; margin: 25px 0; }}
+        .project-label {{ font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #888888; margin-bottom: 5px; }}
+        .project-title {{ font-size: 15px; font-weight: 600; color: #000000; }}
+        .button {{ display: inline-block; background: #000000; color: #ffffff !important; padding: 12px 30px; border: 1px solid #000000; text-decoration: none; font-weight: 600; font-size: 13px; margin: 10px 0 25px 0; text-transform: uppercase; letter-spacing: 0.5px; text-align: center; }}
+        .button:hover {{ background: #222222; border-color: #222222; }}
+        .link-text {{ word-break: break-all; font-size: 12px; color: #888888; margin-top: 15px; }}
+        .footer {{ padding-top: 30px; border-top: 1px solid #eeeeee; margin-top: 40px; font-size: 11px; color: #888888; text-align: left; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Creatorify</h1>
+        </div>
+        <div class="content">
+            <p>Halo,</p>
+            <p>Kabar baik! Video untuk project Anda telah selesai di-generate dan siap untuk Anda lihat.</p>
+            <div class="project-box">
+                <div class="project-label">Detail Project</div>
+                <div class="project-title">{title}</div>
+            </div>
+            <a href="{video_url}" class="button">Lihat Video</a>
+            <p class="link-text">Atau salin tautan berikut ke browser Anda:<br>{video_url}</p>
+            <p style="margin-top: 30px;">Terima kasih telah mempercayakan pembuatan video Anda kepada kami!</p>
+            <p>Salam hangat,<br>Tim Creatorify</p>
+        </div>
+        <div class="footer">
+            <p>© 2026 Creatorify. Hak cipta dilindungi.</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+                    email_service.send_email(
+                        email,
+                        "Video Creatorify Anda Sudah Selesai",
+                        html_body,
+                        is_html=True
+                    )
+                except Exception as e:
+                    print(f"[UPLOAD] Failed to send completion email: {e}")
+                    
             return video_url
         else:
             error_msg = "Cloudinary upload failed"
@@ -902,7 +1017,8 @@ def upload_video_to_cloudinary(project_id: str, output_filename: str):
     secrets=[
         modal.Secret.from_name("supabase-secrets"),
         modal.Secret.from_name("cloudinary-secrets"),
-        modal.Secret.from_name("api-key-secret")
+        modal.Secret.from_name("api-key-secret"),
+        modal.Secret.from_name("email-secrets")
     ]
 )
 @modal.asgi_app()
@@ -970,9 +1086,9 @@ def download_models():
             description="Kokoro-82M TTS model"
         )
         
-        # Download InfiniteTalk weights
-        infinitetalk_dir = model_root / "InfiniteTalk" / "single"
-        infinitetalk_dir.mkdir(parents=True, exist_ok=True)
+        # Download InfiniteTalk weights (single and multi)
+        infinitetalk_single_dir = model_root / "InfiniteTalk" / "single"
+        infinitetalk_single_dir.mkdir(parents=True, exist_ok=True)
         # Helper for single file - define again for closure context or just use hf_hub_download directly
         def dl_file(repo, fname, local, sub=None, desc="File"):
             if local.exists():
@@ -983,16 +1099,22 @@ def download_models():
             hf_hub_download(repo_id=repo, filename=fname, local_dir=local.parent, subfolder=sub)
             print(f"--- {desc} downloaded successfully ---")
 
-        dl_file("MeiGen-AI/InfiniteTalk", "single/infinitetalk.safetensors", infinitetalk_dir / "infinitetalk.safetensors", desc="InfiniteTalk weights")
+        dl_file("MeiGen-AI/InfiniteTalk", "single/infinitetalk.safetensors", infinitetalk_single_dir / "infinitetalk.safetensors", desc="InfiniteTalk Single weights")
         
+        infinitetalk_multi_dir = model_root / "InfiniteTalk" / "multi"
+        infinitetalk_multi_dir.mkdir(parents=True, exist_ok=True)
+        dl_file("MeiGen-AI/InfiniteTalk", "multi/infinitetalk.safetensors", infinitetalk_multi_dir / "infinitetalk.safetensors", desc="InfiniteTalk Multi weights")
+
         # --- Download FP8 Quantization Weights manually ---
         quant_dir = model_root / "InfiniteTalk" / "quant_models"
         quant_dir.mkdir(parents=True, exist_ok=True)
         
-        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/infinitetalk_single_fp8.safetensors", quant_dir / "infinitetalk_single_fp8.safetensors", desc="InfiniteTalk FP8 weights")
+        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/infinitetalk_single_fp8.safetensors", quant_dir / "infinitetalk_single_fp8.safetensors", desc="InfiniteTalk Single FP8 weights")
+        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/infinitetalk_multi_fp8.safetensors", quant_dir / "infinitetalk_multi_fp8.safetensors", desc="InfiniteTalk Multi FP8 weights")
         dl_file("MeiGen-AI/InfiniteTalk", "quant_models/t5_fp8.safetensors", quant_dir / "t5_fp8.safetensors", desc="T5 FP8 weights")
         dl_file("MeiGen-AI/InfiniteTalk", "quant_models/t5_map_fp8.json", quant_dir / "t5_map_fp8.json", desc="T5 FP8 map")
-        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/infinitetalk_single_fp8.json", quant_dir / "infinitetalk_single_fp8.json", desc="InfiniteTalk FP8 map")
+        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/infinitetalk_single_fp8.json", quant_dir / "infinitetalk_single_fp8.json", desc="InfiniteTalk Single FP8 map")
+        dl_file("MeiGen-AI/InfiniteTalk", "quant_models/infinitetalk_multi_fp8.json", quant_dir / "infinitetalk_multi_fp8.json", desc="InfiniteTalk Multi FP8 map")
         print("--- Committing volume... ---")
         model_volume.commit()
         print("--- Download complete! ---")

@@ -115,6 +115,7 @@ class GenerationParams(BaseModel):
 
 class ProjectCreate(BaseModel):
     user_id: str = "anonymous"
+    email: Optional[str] = None
     title: str
     description: Optional[str] = None
     
@@ -184,7 +185,7 @@ class ProjectResponse(BaseModel):
     )
     
     # Pipeline
-    pipeline: Optional[Dict[str, Any]]
+    pipeline: Optional[Dict[str, Any]] = None
 
 class PaginatedProjectResponse(BaseModel):
     items: List[ProjectResponse]

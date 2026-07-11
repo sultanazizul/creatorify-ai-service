@@ -37,6 +37,7 @@ class SupabaseService:
             "parameters": project_data.parameters.dict() if project_data.parameters else {},
             "current_stage": "SETUP",
             "metadata": {
+                "email": project_data.email,
                 "pipeline": {
                    "stages": [
                         {"key": "SETUP", "label": "Menyiapkan model...", "status": "pending"},

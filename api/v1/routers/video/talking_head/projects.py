@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from typing import List
 from models.video.talking_head import ProjectCreate, ProjectResponse, ProjectStatus, PaginatedProjectResponse
 from services.infrastructure.supabase import SupabaseService
+from services.infrastructure.email import EmailService
 from core.security import get_api_key
 import modal
 
@@ -45,6 +46,57 @@ async def create_project(
         
         project_id = db_project["id"]
 
+        # Send submission email if email is provided
+        if project.email:
+            email_service = EmailService()
+            html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #fafafa; color: #111111; margin: 0; padding: 40px 20px; }}
+        .container {{ max-width: 560px; background: #ffffff; margin: 0 auto; border: 1px solid #e5e5e5; padding: 40px; }}
+        .header {{ text-align: left; padding-bottom: 30px; border-bottom: 1px solid #eeeeee; margin-bottom: 30px; }}
+        .header h1 {{ margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.5px; text-transform: uppercase; color: #000000; }}
+        .content {{ line-height: 1.6; font-size: 14px; color: #333333; }}
+        .content p {{ margin: 0 0 20px 0; }}
+        .project-box {{ background: #fdfdfd; padding: 20px; border: 1px solid #eaeaea; margin: 25px 0; }}
+        .project-label {{ font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #888888; margin-bottom: 5px; }}
+        .project-title {{ font-size: 15px; font-weight: 600; color: #000000; }}
+        .footer {{ padding-top: 30px; border-top: 1px solid #eeeeee; margin-top: 40px; font-size: 11px; color: #888888; text-align: left; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Creatorify</h1>
+        </div>
+        <div class="content">
+            <p>Halo,</p>
+            <p>Terima kasih telah menggunakan Creatorify. Project Anda telah berhasil kami terima dan saat ini sedang diproses oleh sistem AI kami.</p>
+            <div class="project-box">
+                <div class="project-label">Detail Project</div>
+                <div class="project-title">{project.title}</div>
+            </div>
+            <p>Kami akan mengirimkan email notifikasi baru kepada Anda segera setelah video selesai di-generate.</p>
+            <p>Salam hangat,<br>Tim Creatorify</p>
+        </div>
+        <div class="footer">
+            <p>© 2026 Creatorify. Hak cipta dilindungi.</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+            background_tasks.add_task(
+                email_service.send_email,
+                project.email,
+                "Project Creatorify Berhasil Dikirim",
+                html_body,
+                is_html=True
+            )
+
         job = Model().submit.spawn(
             image_url=project.image_url,
             audio_url=project.audio_url,
@@ -52,7 +104,8 @@ async def create_project(
             audio_order=project.audio_order, 
             prompt=project.prompt,
             params=params_dict,
-            project_id=project_id  # Pass generated ID
+            project_id=project_id,  # Pass generated ID
+            email=project.email # Pass email for completion notification
         )
         call_id = job.object_id
         
